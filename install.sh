@@ -16,8 +16,8 @@ WHITE="\e[97m"
 RESET="\e[0m"
 
 # 配置常量
-REPO_URL="https://github.com/charmtv/mlnb-xh"
-SCRIPT_URL="https://raw.githubusercontent.com/charmtv/mlnb-xh/main/milier_flow_latest.sh"
+REPO_URL="https://github.com/charmtv/VPS"
+SCRIPT_URL="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
 INSTALL_DIR="/root"
 SCRIPT_NAME="milier_flow.sh"
 SHORTCUT_NAME="xh"
