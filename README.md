@@ -1,6 +1,6 @@
 # 🚀 米粒儿VPS流量消耗管理工具
 
-[![GitHub](https://img.shields.io/badge/GitHub-charmtv/mlnb--xh-blue?logo=github)](https://github.com/charmtv/mlnb-xh)
+[![GitHub](https://img.shields.io/badge/GitHub-charmtv/VPS-blue?logo=github)](https://github.com/charmtv/VPS)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash)](https://www.gnu.org/software/bash/)
 
@@ -10,18 +10,18 @@
 
 ### 方法1：使用curl（推荐）
 ```bash
-curl -fsSL https://raw.githubusercontent.com/charmtv/mlnb-xh/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/charmtv/VPS/main/install.sh | sudo bash
 ```
 
 ### 方法2：使用wget
 ```bash
-wget -qO- https://raw.githubusercontent.com/charmtv/mlnb-xh/main/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/charmtv/VPS/main/install.sh | sudo bash
 ```
 
 ### 方法3：手动安装
 ```bash
 # 下载安装脚本
-wget https://raw.githubusercontent.com/charmtv/mlnb-xh/main/install.sh
+wget https://raw.githubusercontent.com/charmtv/VPS/main/install.sh
 chmod +x install.sh
 sudo bash install.sh
 ```
@@ -152,7 +152,7 @@ bash /root/milier_uninstall.sh
 - 🔗 **官方TG群**：[https://t.me/mlkjfx6](https://t.me/mlkjfx6)
 - 🌐 **官方博客**：[https://ooovps.com](https://ooovps.com)
 - 🏛️ **技术论坛**：[https://nodeloc.com](https://nodeloc.com)
-- 💻 **GitHub项目**：[https://github.com/charmtv/mlnb-xh](https://github.com/charmtv/mlnb-xh)
+- 💻 **GitHub项目**：[https://github.com/charmtv/VPS](https://github.com/charmtv/VPS)
 
 ## 📜 开源协议
 
