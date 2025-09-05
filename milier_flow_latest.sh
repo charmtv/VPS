@@ -66,29 +66,30 @@ CREATED_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
 EOF
 }
 
-# 安全的网络接口检测
+# 安全的网络接口检测 - 自动选择第一个可用接口
 detect_network_interface() {
-    local interfaces=($(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth"))
+    local interfaces=($(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-"))
     
     if [[ ${#interfaces[@]} -eq 0 ]]; then
         error_exit "未找到可用的网络接口"
         return 1
-    elif [[ ${#interfaces[@]} -eq 1 ]]; then
-        echo "${interfaces[0]}"
     else
-        echo -e "${INFO}检测到多个网络接口：${RESET}"
-        for i in "${!interfaces[@]}"; do
-            printf "  ${PRIMARY}%d)${RESET} ${WHITE}%-15s${RESET}\n" "$((i+1))" "${interfaces[i]}"
-        done
-        while true; do
-            read -p "请选择接口编号 [1-${#interfaces[@]}]：" choice
-            if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#interfaces[@]} ]]; then
-                echo "${interfaces[$((choice-1))]}"
+        # 自动选择第一个可用接口，优先选择以eth、ens、enp开头的接口
+        local selected_interface=""
+        for interface in "${interfaces[@]}"; do
+            if [[ "$interface" =~ ^(eth|ens|enp) ]]; then
+                selected_interface="$interface"
                 break
-            else
-                echo -e "${DANGER}  ❌ 无效选择，请重新输入${RESET}"
             fi
         done
+        
+        # 如果没有找到标准接口，选择第一个可用的
+        if [[ -z "$selected_interface" ]]; then
+            selected_interface="${interfaces[0]}"
+        fi
+        
+        echo -e "${SUCCESS}✅ 自动选择网络接口：${WHITE}$selected_interface${RESET}"
+        echo "$selected_interface"
     fi
 }
 
@@ -249,28 +250,72 @@ EOF
     systemctl daemon-reload
     check_command "系统配置失败" || return 1
 
-    # 创建监控脚本
+    # 创建增强的监控脚本
     cat > "$MONITOR_SCRIPT" << 'EOF'
 #!/bin/bash
+# 米粒儿VPS流量监控脚本 - 增强版
 INTERFACE=$1
 
-if [[ -z "$INTERFACE" ]] || [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
-    echo -e "\e[38;5;196m❌ 网络接口无效\e[0m"
+# 参数验证
+if [[ -z "$INTERFACE" ]]; then
+    echo -e "\e[38;5;196m❌ 错误：未指定网络接口\e[0m"
+    exit 1
+fi
+
+if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
+    echo -e "\e[38;5;196m❌ 错误：网络接口 '$INTERFACE' 不存在\e[0m"
+    echo -e "\e[38;5;117m可用接口：\e[0m"
+    ls /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -5
+    exit 1
+fi
+
+# 检查接口状态文件权限
+if [[ ! -r "/sys/class/net/$INTERFACE/statistics/rx_bytes" ]] || [[ ! -r "/sys/class/net/$INTERFACE/statistics/tx_bytes" ]]; then
+    echo -e "\e[38;5;196m❌ 错误：无法读取网络接口统计信息\e[0m"
+    echo -e "\e[38;5;117m请确保以root权限运行\e[0m"
     exit 1
 fi
 
 # 统一颜色方案
 PRIMARY="\e[38;5;39m"; SUCCESS="\e[38;5;46m"; WARNING="\e[38;5;226m"
 INFO="\e[38;5;117m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
+DANGER="\e[38;5;196m"
 BAR_LEN=50
 
-# 格式化函数
+# 检查必要命令
+check_commands() {
+    local missing=()
+    for cmd in awk printf cat; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${DANGER}❌ 缺少必要命令: ${missing[*]}${RESET}"
+        exit 1
+    fi
+}
+
+# 增强的格式化函数，兼容不同的awk实现
 format_speed() {
     local bytes=$1
+    if [[ -z "$bytes" ]] || [[ ! "$bytes" =~ ^[0-9]+$ ]]; then
+        bytes=0
+    fi
+    
     if [[ $bytes -ge 1048576 ]]; then
-        awk "BEGIN{printf \"%.2f MB/s\", $bytes/1024/1024}"
+        if command -v awk &>/dev/null; then
+            awk "BEGIN{printf \"%.2f MB/s\", $bytes/1024/1024}" 2>/dev/null || printf "%.0f MB/s" "$((bytes/1024/1024))"
+        else
+            printf "%.0f MB/s" "$((bytes/1024/1024))"
+        fi
     elif [[ $bytes -ge 1024 ]]; then
-        awk "BEGIN{printf \"%.2f KB/s\", $bytes/1024}"
+        if command -v awk &>/dev/null; then
+            awk "BEGIN{printf \"%.2f KB/s\", $bytes/1024}" 2>/dev/null || printf "%.0f KB/s" "$((bytes/1024))"
+        else
+            printf "%.0f KB/s" "$((bytes/1024))"
+        fi
     else
         printf "%d B/s" "$bytes"
     fi
@@ -278,61 +323,132 @@ format_speed() {
 
 format_total() {
     local bytes=$1
+    if [[ -z "$bytes" ]] || [[ ! "$bytes" =~ ^[0-9]+$ ]]; then
+        bytes=0
+    fi
+    
     if [[ $bytes -ge 1073741824 ]]; then
-        awk "BEGIN{printf \"%.2f GB\", $bytes/1024/1024/1024}"
+        if command -v awk &>/dev/null; then
+            awk "BEGIN{printf \"%.2f GB\", $bytes/1024/1024/1024}" 2>/dev/null || printf "%.1f GB" "$((bytes/1024/1024/1024))"
+        else
+            printf "%.1f GB" "$((bytes/1024/1024/1024))"
+        fi
     elif [[ $bytes -ge 1048576 ]]; then
-        awk "BEGIN{printf \"%.2f MB\", $bytes/1024/1024}"
+        if command -v awk &>/dev/null; then
+            awk "BEGIN{printf \"%.2f MB\", $bytes/1024/1024}" 2>/dev/null || printf "%.0f MB" "$((bytes/1024/1024))"
+        else
+            printf "%.0f MB" "$((bytes/1024/1024))"
+        fi
     else
-        awk "BEGIN{printf \"%.2f KB\", $bytes/1024}"
+        if command -v awk &>/dev/null; then
+            awk "BEGIN{printf \"%.2f KB\", $bytes/1024}" 2>/dev/null || printf "%.0f KB" "$((bytes/1024))"
+        else
+            printf "%.0f KB" "$((bytes/1024))"
+        fi
     fi
 }
 
+# 简化的进度条绘制
 draw_bar() {
     local rate=$1 max_rate=$2
+    if [[ $max_rate -eq 0 ]]; then
+        max_rate=1
+    fi
+    
     local fill=$((rate * BAR_LEN / max_rate))
     [[ $fill -gt $BAR_LEN ]] && fill=$BAR_LEN
-    printf "["; for ((i=0; i<fill; i++)); do printf "█"; done
-    for ((i=fill; i<BAR_LEN; i++)); do printf "░"; done; printf "]"
+    [[ $fill -lt 0 ]] && fill=0
+    
+    printf "["
+    for ((i=0; i<fill; i++)); do printf "█"; done
+    for ((i=fill; i<BAR_LEN; i++)); do printf "░"; done
+    printf "]"
 }
 
-# 初始化
-RX_PREV=$(cat /sys/class/net/$INTERFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-TX_PREV=$(cat /sys/class/net/$INTERFACE/statistics/tx_bytes 2>/dev/null || echo 0)
+# 安全的数值读取
+safe_read_bytes() {
+    local file="$1"
+    if [[ -r "$file" ]]; then
+        local value=$(cat "$file" 2>/dev/null)
+        if [[ "$value" =~ ^[0-9]+$ ]]; then
+            echo "$value"
+        else
+            echo "0"
+        fi
+    else
+        echo "0"
+    fi
+}
+
+# 检查命令可用性
+check_commands
+
+# 初始化，使用安全读取
+echo -e "${INFO}正在初始化监控...${RESET}"
+RX_PREV=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/rx_bytes")
+TX_PREV=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/tx_bytes")
 RX_TOTAL=0; TX_TOTAL=0; DURATION=0
+
+# 检查初始读取是否成功
+if [[ "$RX_PREV" == "0" ]] && [[ "$TX_PREV" == "0" ]]; then
+    echo -e "${WARNING}⚠️  警告：无法读取初始流量数据，显示可能不准确${RESET}"
+    sleep 1
+fi
 
 clear
 echo -e "${PRIMARY}                                实时流量监控${RESET}"
 echo -e "${INFO}                          网络接口：${WHITE}$INTERFACE${RESET}"
 echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '=')"
+echo -e "${WARNING}按 Ctrl+C 退出监控${RESET}"
 echo
 
-trap 'echo -e "\n${WARNING}监控已停止${RESET}"; exit 0' INT
+# 设置信号处理
+trap 'echo -e "\n${WARNING}监控已停止${RESET}"; exit 0' INT TERM
 
+# 主监控循环
 while true; do
-    sleep 1; ((DURATION++))
+    sleep 1
+    ((DURATION++))
     
-    RX_CUR=$(cat /sys/class/net/$INTERFACE/statistics/rx_bytes 2>/dev/null || echo $RX_PREV)
-    TX_CUR=$(cat /sys/class/net/$INTERFACE/statistics/tx_bytes 2>/dev/null || echo $TX_PREV)
-    RX_RATE=$((RX_CUR - RX_PREV)); TX_RATE=$((TX_CUR - TX_PREV))
+    # 安全读取当前数值
+    RX_CUR=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/rx_bytes")
+    TX_CUR=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/tx_bytes")
+    
+    # 计算速率（防止负数）
+    RX_RATE=$((RX_CUR >= RX_PREV ? RX_CUR - RX_PREV : 0))
+    TX_RATE=$((TX_CUR >= TX_PREV ? TX_CUR - TX_PREV : 0))
+    
+    # 更新累计值
     RX_PREV=$RX_CUR; TX_PREV=$TX_CUR
     RX_TOTAL=$((RX_TOTAL + RX_RATE)); TX_TOTAL=$((TX_TOTAL + TX_RATE))
     
+    # 格式化显示数据
     RX_SPEED=$(format_speed $RX_RATE); TX_SPEED=$(format_speed $TX_RATE)
     RX_TOTAL_DISPLAY=$(format_total $RX_TOTAL); TX_TOTAL_DISPLAY=$(format_total $TX_TOTAL)
     
-    MAX_SPEED=$((10*1024*1024))
+    # 动态调整最大速度刻度
+    MAX_SPEED=$((10*1024*1024))  # 默认10MB/s
     [[ $RX_RATE -gt $MAX_SPEED ]] && MAX_SPEED=$RX_RATE
     [[ $TX_RATE -gt $MAX_SPEED ]] && MAX_SPEED=$TX_RATE
     
-    RX_BAR=$(draw_bar $RX_RATE $MAX_SPEED); TX_BAR=$(draw_bar $TX_RATE $MAX_SPEED)
-    HOURS=$((DURATION / 3600)); MINS=$(((DURATION % 3600) / 60)); SECS=$((DURATION % 60))
+    # 绘制进度条
+    RX_BAR=$(draw_bar $RX_RATE $MAX_SPEED)
+    TX_BAR=$(draw_bar $TX_RATE $MAX_SPEED)
+    
+    # 计算时间和平均值
+    HOURS=$((DURATION / 3600))
+    MINS=$(((DURATION % 3600) / 60))
+    SECS=$((DURATION % 60))
     AVG_RX=$(( DURATION > 0 ? RX_TOTAL / DURATION : 0 ))
     AVG_TX=$(( DURATION > 0 ? TX_TOTAL / DURATION : 0 ))
     
+    # 显示统计信息（使用\r回到行首）
     printf "\r${SUCCESS}下载：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$RX_SPEED" "$RX_BAR" "$RX_TOTAL_DISPLAY"
     printf "\r${INFO}上传：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$TX_SPEED" "$TX_BAR" "$TX_TOTAL_DISPLAY"
     printf "\r${WARNING}运行时长：${WHITE}%02d:%02d:%02d${RESET} ${PRIMARY}|${RESET} ${INFO}平均：下载 ${WHITE}%-12s${RESET} 上传 ${WHITE}%-12s${RESET}" \
         $HOURS $MINS $SECS "$(format_speed $AVG_RX)" "$(format_speed $AVG_TX)"
+    
+    # 移动光标到上一行开始位置，实现刷新效果
     printf "\033[3A"
 done
 EOF
@@ -633,18 +749,92 @@ show_menu() {
 }
 
 # ──────────────────────────────── 环境检查 ────────────────────────────────────
+
+# 检测系统类型
+detect_system_type() {
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        OS_ID="${ID}"
+        OS_VERSION="${VERSION_ID}"
+        OS_NAME="${PRETTY_NAME}"
+    fi
+}
+
+# 安装缺失的依赖
+install_missing_deps() {
+    local missing_cmds=()
+    local required_commands=("curl" "systemctl" "nproc" "free" "df" "ps" "grep" "awk" "sed" "less")
+    
+    # 检查缺失的命令
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_cmds+=("$cmd")
+        fi
+    done
+    
+    # 如果有缺失的命令，尝试安装
+    if [[ ${#missing_cmds[@]} -gt 0 ]]; then
+        echo -e "${WARNING}⚠️  检测到缺失依赖: ${missing_cmds[*]}${RESET}"
+        echo -e "${INFO}正在尝试自动安装...${RESET}"
+        
+        case "$OS_ID" in
+            ubuntu|debian|linuxmint)
+                apt-get update &>/dev/null
+                apt-get install -y curl procps coreutils systemd less &>/dev/null
+                ;;
+            centos|rhel|fedora|rocky|almalinux)
+                if command -v yum &>/dev/null; then
+                    yum install -y curl procps-ng coreutils systemd less &>/dev/null
+                elif command -v dnf &>/dev/null; then
+                    dnf install -y curl procps-ng coreutils systemd less &>/dev/null
+                fi
+                ;;
+            arch|manjaro)
+                pacman -S --noconfirm curl procps-ng coreutils systemd less &>/dev/null
+                ;;
+        esac
+        
+        # 再次检查
+        local still_missing=()
+        for cmd in "${required_commands[@]}"; do
+            if ! command -v "$cmd" &>/dev/null; then
+                still_missing+=("$cmd")
+            fi
+        done
+        
+        if [[ ${#still_missing[@]} -gt 0 ]]; then
+            echo -e "${DANGER}❌ 以下依赖安装失败: ${still_missing[*]}${RESET}"
+            echo -e "${INFO}请手动安装后重新运行脚本${RESET}"
+            exit 1
+        else
+            echo -e "${SUCCESS}✅ 依赖安装完成${RESET}"
+        fi
+    fi
+}
+
 check_environment() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${DANGER}❌ 需要root权限${RESET}"
         exit 1
     fi
 
-    for cmd in systemctl curl nproc free df; do
-        if ! command -v $cmd &> /dev/null; then
-            echo -e "${DANGER}❌ 缺少命令：$cmd${RESET}"
-            exit 1
-        fi
-    done
+    # 检测系统类型
+    detect_system_type
+    
+    # 检查并安装缺失的依赖
+    install_missing_deps
+    
+    # 检查关键系统文件
+    if [[ ! -d "/sys/class/net" ]]; then
+        echo -e "${DANGER}❌ 系统网络接口目录不存在${RESET}"
+        exit 1
+    fi
+    
+    # 检查systemd支持
+    if ! systemctl --version &>/dev/null; then
+        echo -e "${DANGER}❌ 系统不支持systemd${RESET}"
+        exit 1
+    fi
 }
 
 # ──────────────────────────────── 程序主入口 ──────────────────────────────────
