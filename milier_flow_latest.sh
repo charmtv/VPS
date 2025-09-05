@@ -71,11 +71,27 @@ detect_network_interface() {
     local interfaces=($(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-"))
     
     if [[ ${#interfaces[@]} -eq 0 ]]; then
-        error_exit "未找到可用的网络接口"
+        echo "未找到可用的网络接口" >&2
         return 1
-    else
-        # 自动选择第一个可用接口，优先选择以eth、ens、enp开头的接口
-        local selected_interface=""
+    fi
+    
+    # 自动选择第一个可用接口，优先选择以eth、ens、enp开头的接口
+    local selected_interface=""
+    for interface in "${interfaces[@]}"; do
+        # 检查接口是否真正可用（有统计文件）
+        if [[ -r "/sys/class/net/$interface/statistics/rx_bytes" ]] && [[ -r "/sys/class/net/$interface/statistics/tx_bytes" ]]; then
+            if [[ "$interface" =~ ^(eth|ens|enp) ]]; then
+                selected_interface="$interface"
+                break
+            elif [[ -z "$selected_interface" ]]; then
+                # 如果还没有选择接口，先记录这个可用的接口
+                selected_interface="$interface"
+            fi
+        fi
+    done
+    
+    # 如果没有找到可用接口，再试一次不检查统计文件
+    if [[ -z "$selected_interface" ]]; then
         for interface in "${interfaces[@]}"; do
             if [[ "$interface" =~ ^(eth|ens|enp) ]]; then
                 selected_interface="$interface"
@@ -83,14 +99,20 @@ detect_network_interface() {
             fi
         done
         
-        # 如果没有找到标准接口，选择第一个可用的
+        # 如果还是没有，选择第一个
         if [[ -z "$selected_interface" ]]; then
             selected_interface="${interfaces[0]}"
         fi
-        
-        echo -e "${SUCCESS}✅ 自动选择网络接口：${WHITE}$selected_interface${RESET}"
-        echo "$selected_interface"
     fi
+    
+    if [[ -z "$selected_interface" ]]; then
+        echo "无法确定有效的网络接口" >&2
+        return 1
+    fi
+    
+    # 只输出接口名称，不输出提示信息（避免污染变量赋值）
+    echo "$selected_interface"
+    return 0
 }
 
 # 验证线程数
@@ -256,25 +278,41 @@ EOF
 # 米粒儿VPS流量监控脚本 - 增强版
 INTERFACE=$1
 
+# 显示启动信息
+echo -e "\e[38;5;117m正在启动监控脚本...\e[0m"
+echo -e "\e[38;5;117m传入参数：$*\e[0m"
+
 # 参数验证
 if [[ -z "$INTERFACE" ]]; then
     echo -e "\e[38;5;196m❌ 错误：未指定网络接口\e[0m"
+    echo -e "\e[38;5;117m用法：$0 <网络接口名>\e[0m"
+    read -p "按回车继续..."
     exit 1
 fi
+
+echo -e "\e[38;5;117m检查网络接口：$INTERFACE\e[0m"
 
 if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
     echo -e "\e[38;5;196m❌ 错误：网络接口 '$INTERFACE' 不存在\e[0m"
     echo -e "\e[38;5;117m可用接口：\e[0m"
-    ls /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -5
+    ls -la /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -10
+    read -p "按回车继续..."
     exit 1
 fi
 
 # 检查接口状态文件权限
 if [[ ! -r "/sys/class/net/$INTERFACE/statistics/rx_bytes" ]] || [[ ! -r "/sys/class/net/$INTERFACE/statistics/tx_bytes" ]]; then
     echo -e "\e[38;5;196m❌ 错误：无法读取网络接口统计信息\e[0m"
+    echo -e "\e[38;5;117m接口路径：/sys/class/net/$INTERFACE/statistics/\e[0m"
+    echo -e "\e[38;5;117m权限检查：\e[0m"
+    ls -la "/sys/class/net/$INTERFACE/statistics/" 2>/dev/null | head -5
+    echo -e "\e[38;5;117m当前用户：$(whoami)\e[0m"
     echo -e "\e[38;5;117m请确保以root权限运行\e[0m"
+    read -p "按回车继续..."
     exit 1
 fi
+
+echo -e "\e[38;5;46m✅ 接口检查通过\e[0m"
 
 # 统一颜色方案
 PRIMARY="\e[38;5;39m"; SUCCESS="\e[38;5;46m"; WARNING="\e[38;5;226m"
@@ -381,19 +419,30 @@ safe_read_bytes() {
 }
 
 # 检查命令可用性
+echo -e "${INFO}检查必要命令...${RESET}"
 check_commands
 
 # 初始化，使用安全读取
 echo -e "${INFO}正在初始化监控...${RESET}"
+echo -e "${INFO}读取接口统计文件...${RESET}"
+
 RX_PREV=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/rx_bytes")
 TX_PREV=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/tx_bytes")
 RX_TOTAL=0; TX_TOTAL=0; DURATION=0
 
+echo -e "${INFO}初始读取 - RX: $RX_PREV bytes, TX: $TX_PREV bytes${RESET}"
+
 # 检查初始读取是否成功
 if [[ "$RX_PREV" == "0" ]] && [[ "$TX_PREV" == "0" ]]; then
-    echo -e "${WARNING}⚠️  警告：无法读取初始流量数据，显示可能不准确${RESET}"
-    sleep 1
+    echo -e "${WARNING}⚠️  警告：初始流量数据为零，可能是接口刚启动或无流量${RESET}"
+    echo -e "${INFO}这不影响监控功能，将显示相对变化量${RESET}"
+    sleep 2
+else
+    echo -e "${SUCCESS}✅ 初始数据读取成功${RESET}"
 fi
+
+echo -e "${INFO}准备启动监控界面...${RESET}"
+sleep 1
 
 clear
 echo -e "${PRIMARY}                                实时流量监控${RESET}"
@@ -406,25 +455,53 @@ echo
 trap 'echo -e "\n${WARNING}监控已停止${RESET}"; exit 0' INT TERM
 
 # 主监控循环
+echo -e "${SUCCESS}开始监控循环...${RESET}"
+LOOP_COUNT=0
+
 while true; do
     sleep 1
     ((DURATION++))
+    ((LOOP_COUNT++))
+    
+    # 定期检查接口是否仍然存在
+    if [[ $((LOOP_COUNT % 30)) -eq 0 ]]; then
+        if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
+            echo -e "\n${DANGER}❌ 网络接口 $INTERFACE 已不存在${RESET}"
+            break
+        fi
+    fi
     
     # 安全读取当前数值
     RX_CUR=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/rx_bytes")
     TX_CUR=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/tx_bytes")
     
-    # 计算速率（防止负数）
-    RX_RATE=$((RX_CUR >= RX_PREV ? RX_CUR - RX_PREV : 0))
-    TX_RATE=$((TX_CUR >= TX_PREV ? TX_CUR - TX_PREV : 0))
+    # 调试输出（前3次循环）
+    if [[ $LOOP_COUNT -le 3 ]]; then
+        echo -e "${INFO}Loop $LOOP_COUNT - Current: RX=$RX_CUR, TX=$TX_CUR, Prev: RX=$RX_PREV, TX=$TX_PREV${RESET}"
+    fi
+    
+    # 计算速率（防止负数和异常值）
+    if [[ "$RX_CUR" =~ ^[0-9]+$ ]] && [[ "$TX_CUR" =~ ^[0-9]+$ ]] && [[ "$RX_PREV" =~ ^[0-9]+$ ]] && [[ "$TX_PREV" =~ ^[0-9]+$ ]]; then
+        RX_RATE=$((RX_CUR >= RX_PREV ? RX_CUR - RX_PREV : 0))
+        TX_RATE=$((TX_CUR >= TX_PREV ? TX_CUR - TX_PREV : 0))
+        
+        # 防止异常大值（可能是计数器重置）
+        [[ $RX_RATE -gt 1073741824 ]] && RX_RATE=0  # 1GB/s限制
+        [[ $TX_RATE -gt 1073741824 ]] && TX_RATE=0
+    else
+        echo -e "\n${WARNING}数据读取异常，跳过此次统计${RESET}"
+        RX_RATE=0; TX_RATE=0
+    fi
     
     # 更新累计值
     RX_PREV=$RX_CUR; TX_PREV=$TX_CUR
     RX_TOTAL=$((RX_TOTAL + RX_RATE)); TX_TOTAL=$((TX_TOTAL + TX_RATE))
     
     # 格式化显示数据
-    RX_SPEED=$(format_speed $RX_RATE); TX_SPEED=$(format_speed $TX_RATE)
-    RX_TOTAL_DISPLAY=$(format_total $RX_TOTAL); TX_TOTAL_DISPLAY=$(format_total $TX_TOTAL)
+    RX_SPEED=$(format_speed $RX_RATE 2>/dev/null || echo "0 B/s")
+    TX_SPEED=$(format_speed $TX_RATE 2>/dev/null || echo "0 B/s")
+    RX_TOTAL_DISPLAY=$(format_total $RX_TOTAL 2>/dev/null || echo "0 KB")
+    TX_TOTAL_DISPLAY=$(format_total $TX_TOTAL 2>/dev/null || echo "0 KB")
     
     # 动态调整最大速度刻度
     MAX_SPEED=$((10*1024*1024))  # 默认10MB/s
@@ -432,8 +509,8 @@ while true; do
     [[ $TX_RATE -gt $MAX_SPEED ]] && MAX_SPEED=$TX_RATE
     
     # 绘制进度条
-    RX_BAR=$(draw_bar $RX_RATE $MAX_SPEED)
-    TX_BAR=$(draw_bar $TX_RATE $MAX_SPEED)
+    RX_BAR=$(draw_bar $RX_RATE $MAX_SPEED 2>/dev/null || echo "[░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]")
+    TX_BAR=$(draw_bar $TX_RATE $MAX_SPEED 2>/dev/null || echo "[░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]")
     
     # 计算时间和平均值
     HOURS=$((DURATION / 3600))
@@ -442,15 +519,24 @@ while true; do
     AVG_RX=$(( DURATION > 0 ? RX_TOTAL / DURATION : 0 ))
     AVG_TX=$(( DURATION > 0 ? TX_TOTAL / DURATION : 0 ))
     
-    # 显示统计信息（使用\r回到行首）
-    printf "\r${SUCCESS}下载：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$RX_SPEED" "$RX_BAR" "$RX_TOTAL_DISPLAY"
-    printf "\r${INFO}上传：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$TX_SPEED" "$TX_BAR" "$TX_TOTAL_DISPLAY"
-    printf "\r${WARNING}运行时长：${WHITE}%02d:%02d:%02d${RESET} ${PRIMARY}|${RESET} ${INFO}平均：下载 ${WHITE}%-12s${RESET} 上传 ${WHITE}%-12s${RESET}" \
-        $HOURS $MINS $SECS "$(format_speed $AVG_RX)" "$(format_speed $AVG_TX)"
-    
-    # 移动光标到上一行开始位置，实现刷新效果
-    printf "\033[3A"
+    # 显示统计信息
+    if [[ $LOOP_COUNT -gt 3 ]]; then
+        # 正常显示模式（清除调试信息后）
+        printf "\r${SUCCESS}下载：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$RX_SPEED" "$RX_BAR" "$RX_TOTAL_DISPLAY"
+        printf "\r${INFO}上传：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$TX_SPEED" "$TX_BAR" "$TX_TOTAL_DISPLAY"
+        printf "\r${WARNING}运行时长：${WHITE}%02d:%02d:%02d${RESET} ${PRIMARY}|${RESET} ${INFO}平均：下载 ${WHITE}%-12s${RESET} 上传 ${WHITE}%-12s${RESET}" \
+            $HOURS $MINS $SECS "$(format_speed $AVG_RX 2>/dev/null || echo "0 B/s")" "$(format_speed $AVG_TX 2>/dev/null || echo "0 B/s")"
+        
+        # 移动光标到上一行开始位置，实现刷新效果
+        printf "\033[3A"
+    else
+        # 调试模式显示
+        printf "${SUCCESS}下载：${WHITE}%-12s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$RX_SPEED" "$RX_TOTAL_DISPLAY"
+        printf "${INFO}上传：${WHITE}%-12s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$TX_SPEED" "$TX_TOTAL_DISPLAY"
+    fi
 done
+
+echo -e "\n${INFO}监控循环结束${RESET}"
 EOF
     chmod +x "$MONITOR_SCRIPT"
 
@@ -565,19 +651,89 @@ restart_service() {
 
 # 显示监控
 show_monitor() {
+    echo -e "${INFO}正在启动实时流量监控...${RESET}"
+    
+    # 检查服务状态（非强制要求）
     if ! systemctl is-active --quiet $SERVICE_NAME; then
-        echo -e "${DANGER}❌ 服务未运行${RESET}"
+        echo -e "${WARNING}⚠️  流量消耗服务未运行，但监控功能仍可使用${RESET}"
+    else
+        echo -e "${SUCCESS}✅ 流量消耗服务运行中${RESET}"
+    fi
+    
+    # 检查监控脚本是否存在
+    if [[ ! -f "$MONITOR_SCRIPT" ]]; then
+        echo -e "${DANGER}❌ 监控脚本不存在：$MONITOR_SCRIPT${RESET}"
+        echo -e "${INFO}正在重新初始化服务...${RESET}"
+        init_service
+        if [[ ! -f "$MONITOR_SCRIPT" ]]; then
+            echo -e "${DANGER}❌ 监控脚本创建失败${RESET}"
+            read -p "按回车返回菜单..."
+            return
+        fi
+    fi
+    
+    # 确保监控脚本可执行
+    chmod +x "$MONITOR_SCRIPT" 2>/dev/null
+    
+    # 加载配置
+    load_config
+    
+    # 获取网络接口
+    local interface=""
+    if [[ -n "$LAST_INTERFACE" ]]; then
+        # 验证保存的接口是否仍然有效
+        if [[ -d "/sys/class/net/$LAST_INTERFACE" ]]; then
+            interface="$LAST_INTERFACE"
+            echo -e "${INFO}使用已保存的网络接口：${WHITE}$interface${RESET}"
+        else
+            echo -e "${WARNING}⚠️  已保存的接口无效，重新检测...${RESET}"
+        fi
+    fi
+    
+    # 如果没有有效接口，重新检测
+    if [[ -z "$interface" ]]; then
+        echo -e "${INFO}正在检测网络接口...${RESET}"
+        interface=$(detect_network_interface 2>&1)
+        local detect_result=$?
+        
+        if [[ $detect_result -ne 0 ]] || [[ -z "$interface" ]]; then
+            echo -e "${DANGER}❌ 网络接口检测失败${RESET}"
+            echo -e "${INFO}检测结果：${WHITE}$interface${RESET}"
+            echo -e "${INFO}可用接口列表：${RESET}"
+            ls -la /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -5
+            read -p "按回车返回菜单..."
+            return
+        fi
+    fi
+    
+    # 验证接口有效性
+    if [[ ! -d "/sys/class/net/$interface" ]]; then
+        echo -e "${DANGER}❌ 网络接口无效：$interface${RESET}"
         read -p "按回车返回菜单..."
         return
     fi
     
-    load_config
-    local interface=${LAST_INTERFACE:-$(detect_network_interface)}
-    [[ $? -ne 0 ]] && return
+    # 检查接口统计文件权限
+    if [[ ! -r "/sys/class/net/$interface/statistics/rx_bytes" ]] || [[ ! -r "/sys/class/net/$interface/statistics/tx_bytes" ]]; then
+        echo -e "${DANGER}❌ 无法读取网络接口统计信息${RESET}"
+        echo -e "${INFO}请确保以root权限运行此脚本${RESET}"
+        read -p "按回车返回菜单..."
+        return
+    fi
     
-    echo -e "${INFO}启动监控...${RESET}"
-    sleep 1
-    bash "$MONITOR_SCRIPT" "$interface"
+    echo -e "${SUCCESS}✅ 准备完成，启动监控界面...${RESET}"
+    echo -e "${INFO}使用网络接口：${WHITE}$interface${RESET}"
+    echo -e "${WARNING}提示：按 Ctrl+C 可退出监控${RESET}"
+    sleep 2
+    
+    # 启动监控脚本
+    if ! bash "$MONITOR_SCRIPT" "$interface"; then
+        echo
+        echo -e "${DANGER}❌ 监控脚本执行失败${RESET}"
+        echo -e "${INFO}脚本路径：${WHITE}$MONITOR_SCRIPT${RESET}"
+        echo -e "${INFO}网络接口：${WHITE}$interface${RESET}"
+        read -p "按回车返回菜单..."
+    fi
 }
 
 # 显示日志
@@ -663,6 +819,126 @@ shortcut_management() {
     esac
 }
 
+# 测试监控功能
+test_monitor() {
+    clear
+    echo -e "${PRIMARY}监控功能测试${RESET}"
+    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '─')${RESET}"
+    echo
+    
+    echo -e "${INFO}正在执行监控功能诊断...${RESET}"
+    echo
+    
+    # 1. 检查脚本文件
+    echo -e "${INFO}1. 检查监控脚本文件...${RESET}"
+    if [[ -f "$MONITOR_SCRIPT" ]]; then
+        echo -e "${SUCCESS}✅ 监控脚本存在：$MONITOR_SCRIPT${RESET}"
+        if [[ -x "$MONITOR_SCRIPT" ]]; then
+            echo -e "${SUCCESS}✅ 监控脚本可执行${RESET}"
+        else
+            echo -e "${WARNING}⚠️  监控脚本无执行权限，正在修复...${RESET}"
+            chmod +x "$MONITOR_SCRIPT"
+        fi
+    else
+        echo -e "${DANGER}❌ 监控脚本不存在，正在创建...${RESET}"
+        init_service
+    fi
+    
+    # 2. 检查网络接口
+    echo -e "${INFO}2. 检查网络接口...${RESET}"
+    echo -e "${INFO}可用网络接口列表：${RESET}"
+    if ls /sys/class/net/ 2>/dev/null; then
+        local interfaces=($(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-"))
+        echo -e "${INFO}过滤后的接口：${WHITE}${interfaces[*]}${RESET}"
+        
+        if [[ ${#interfaces[@]} -gt 0 ]]; then
+            local test_interface="${interfaces[0]}"
+            echo -e "${SUCCESS}✅ 选择测试接口：$test_interface${RESET}"
+            
+            # 3. 检查接口权限
+            echo -e "${INFO}3. 检查接口统计文件权限...${RESET}"
+            if [[ -r "/sys/class/net/$test_interface/statistics/rx_bytes" ]]; then
+                local rx_bytes=$(cat "/sys/class/net/$test_interface/statistics/rx_bytes" 2>/dev/null)
+                echo -e "${SUCCESS}✅ 可读取RX统计：$rx_bytes bytes${RESET}"
+            else
+                echo -e "${DANGER}❌ 无法读取RX统计文件${RESET}"
+            fi
+            
+            if [[ -r "/sys/class/net/$test_interface/statistics/tx_bytes" ]]; then
+                local tx_bytes=$(cat "/sys/class/net/$test_interface/statistics/tx_bytes" 2>/dev/null)
+                echo -e "${SUCCESS}✅ 可读取TX统计：$tx_bytes bytes${RESET}"
+            else
+                echo -e "${DANGER}❌ 无法读取TX统计文件${RESET}"
+            fi
+            
+            # 4. 测试命令可用性
+            echo -e "${INFO}4. 检查必需命令...${RESET}"
+            local required_cmds=("awk" "printf" "cat" "sleep" "bash")
+            for cmd in "${required_cmds[@]}"; do
+                if command -v "$cmd" &>/dev/null; then
+                    echo -e "${SUCCESS}✅ $cmd 命令可用${RESET}"
+                else
+                    echo -e "${DANGER}❌ $cmd 命令缺失${RESET}"
+                fi
+            done
+            
+            # 5. 快速监控测试
+            echo
+            echo -e "${INFO}5. 执行快速监控测试（10秒）...${RESET}"
+            echo -e "${WARNING}测试中，请稍等...${RESET}"
+            
+            # 启动后台监控测试
+            timeout 10 bash -c "
+                source /dev/stdin << 'TESTEOF'
+INTERFACE='$test_interface'
+safe_read_bytes() {
+    local file=\"\$1\"
+    if [[ -r \"\$file\" ]]; then
+        local value=\$(cat \"\$file\" 2>/dev/null)
+        if [[ \"\$value\" =~ ^[0-9]+\$ ]]; then
+            echo \"\$value\"
+        else
+            echo \"0\"
+        fi
+    else
+        echo \"0\"
+    fi
+}
+
+echo \"开始监控测试...\"
+RX_PREV=\$(safe_read_bytes \"/sys/class/net/\$INTERFACE/statistics/rx_bytes\")
+TX_PREV=\$(safe_read_bytes \"/sys/class/net/\$INTERFACE/statistics/tx_bytes\")
+echo \"初始值 - RX: \$RX_PREV, TX: \$TX_PREV\"
+
+for i in {1..5}; do
+    sleep 2
+    RX_CUR=\$(safe_read_bytes \"/sys/class/net/\$INTERFACE/statistics/rx_bytes\")
+    TX_CUR=\$(safe_read_bytes \"/sys/class/net/\$INTERFACE/statistics/tx_bytes\")
+    RX_RATE=\$((RX_CUR - RX_PREV))
+    TX_RATE=\$((TX_CUR - TX_PREV))
+    echo \"第\${i}次检测 - RX变化: \$RX_RATE bytes/2s, TX变化: \$TX_RATE bytes/2s\"
+    RX_PREV=\$RX_CUR; TX_PREV=\$TX_CUR
+done
+echo \"监控测试完成\"
+TESTEOF
+            " && echo -e "${SUCCESS}✅ 监控测试完成${RESET}" || echo -e "${WARNING}⚠️  监控测试超时或失败${RESET}"
+            
+        else
+            echo -e "${DANGER}❌ 没有可用的网络接口${RESET}"
+        fi
+    else
+        echo -e "${DANGER}❌ 无法访问网络接口目录${RESET}"
+    fi
+    
+    echo
+    echo -e "${INFO}诊断完成！${RESET}"
+    echo
+    echo -e "${PRIMARY}如果测试正常，实时监控应该可以工作${RESET}"
+    echo -e "${WARNING}如果仍有问题，请检查以上失败的项目${RESET}"
+    echo
+    read -p "按回车返回菜单..."
+}
+
 # 卸载服务
 uninstall_service() {
     clear
@@ -717,11 +993,12 @@ show_menu() {
     echo -e "${WARNING}4) 重启流量服务${RESET}"
     echo -e "${INFO}5) 查看服务日志${RESET}"
     echo -e "${SECONDARY}6) 快捷键管理${RESET}"
+    echo -e "${ACCENT}8) 测试监控功能${RESET}"
     echo -e "${DANGER}7) 卸载全部服务${RESET}"
     echo -e "${GRAY}0) 退出程序${RESET}"
     echo
     
-    read -p "请选择操作 [0-7]：" choice
+    read -p "请选择操作 [0-8]：" choice
     
     case $choice in
         1) start_service ;;
@@ -731,6 +1008,7 @@ show_menu() {
         5) show_logs ;;
         6) shortcut_management ;;
         7) uninstall_service ;;
+        8) test_monitor ;;
         0) 
             clear
             echo
@@ -742,7 +1020,7 @@ show_menu() {
             exit 0
             ;;
         *) 
-            echo -e "${DANGER}❌ 无效选项，请输入 0-7${RESET}"
+            echo -e "${DANGER}❌ 无效选项，请输入 0-8${RESET}"
             sleep 1
             ;;
     esac
