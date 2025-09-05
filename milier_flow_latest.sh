@@ -145,8 +145,45 @@ LAST_URL="$1"
 LAST_THREADS="$2"
 LAST_INTERFACE="$3"
 INSTALL_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
+USAGE_COUNT="$((${USAGE_COUNT:-0} + 1))"
+LAST_USED="$(date '+%Y-%m-%d %H:%M:%S')"
 # ═══════════════════════════════════════════════════════════════════
 EOF
+}
+
+# 保存高级配置
+save_advanced_config() {
+    local preset_name="$1" url="$2" threads="$3" refresh_rate="$4" dl_threshold="$5" ul_threshold="$6"
+    local preset_file="/root/milier_presets.conf"
+    
+    # 添加预设到文件
+    {
+        echo "# 预设：$preset_name - $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "PRESET_${preset_name}_URL=\"$url\""
+        echo "PRESET_${preset_name}_THREADS=\"$threads\""
+        echo "PRESET_${preset_name}_REFRESH=\"$refresh_rate\""
+        echo "PRESET_${preset_name}_DL_THRESHOLD=\"$dl_threshold\""
+        echo "PRESET_${preset_name}_UL_THRESHOLD=\"$ul_threshold\""
+        echo
+    } >> "$preset_file"
+}
+
+# 加载预设配置
+load_preset() {
+    local preset_name="$1"
+    local preset_file="/root/milier_presets.conf"
+    
+    if [[ -f "$preset_file" ]]; then
+        source "$preset_file"
+        
+        local url_var="PRESET_${preset_name}_URL"
+        local threads_var="PRESET_${preset_name}_THREADS"
+        local refresh_var="PRESET_${preset_name}_REFRESH"
+        local dl_var="PRESET_${preset_name}_DL_THRESHOLD"
+        local ul_var="PRESET_${preset_name}_UL_THRESHOLD"
+        
+        echo "${!url_var:-}" "${!threads_var:-}" "${!refresh_var:-}" "${!dl_var:-}" "${!ul_var:-}"
+    fi
 }
 
 # 读取配置
@@ -164,6 +201,53 @@ get_service_info() {
     else
         printf "${DANGER}服务状态：${WHITE}%-8s${RESET}\n" "已停止"
     fi
+}
+
+# 获取增强的系统信息
+get_system_info() {
+    # 基本系统信息
+    local hostname=$(hostname 2>/dev/null || echo "未知")
+    local kernel=$(uname -r 2>/dev/null || echo "未知")
+    local uptime_info=$(uptime 2>/dev/null | awk -F'up ' '{print $2}' | awk -F',' '{print $1}' || echo "未知")
+    
+    # CPU信息
+    local cpu_cores=$(nproc 2>/dev/null || echo "未知")
+    local cpu_model=$(grep "model name" /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2 | xargs || echo "未知")
+    
+    # 内存信息
+    local mem_total mem_used mem_free
+    if [[ -r /proc/meminfo ]]; then
+        mem_total=$(awk '/MemTotal/ {printf "%.2f GB", $2/1024/1024}' /proc/meminfo)
+        mem_free=$(awk '/MemAvailable/ {printf "%.2f GB", $2/1024/1024}' /proc/meminfo)
+        mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.2f GB", $3/1024}' || echo "未知")
+    else
+        mem_total="未知"; mem_used="未知"; mem_free="未知"
+    fi
+    
+    # 磁盘信息
+    local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}' || echo "未知")
+    
+    # 网络接口信息
+    local interfaces_count=$(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-" | wc -l || echo 0)
+    
+    # 负载信息
+    local load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "未知")
+    
+    # 格式化显示
+    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
+        "主机名：" "$hostname" \
+        "内核：" "$kernel"
+    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
+        "运行时间：" "$uptime_info" \
+        "CPU核心：" "$cpu_cores"
+    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
+        "内存使用：" "$mem_used" \
+        "总内存：" "$mem_total"
+    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
+        "磁盘使用：" "$disk_usage" \
+        "网络接口：" "$interfaces_count"
+    printf "${INFO}%-12s${WHITE}%-50s${RESET}\n" \
+        "系统负载：" "$load_avg"
 }
 
 # ──────────────────────────────── 快捷键管理 ──────────────────────────────────
@@ -939,6 +1023,403 @@ TESTEOF
     read -p "按回车返回菜单..."
 }
 
+# 高级监控功能
+advanced_monitor() {
+    clear
+    echo -e "${PRIMARY}高级流量监控${RESET}"
+    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '═')${RESET}"
+    echo
+    
+    # 获取网络接口
+    echo -e "${INFO}正在检测网络接口...${RESET}"
+    load_config
+    local interface=""
+    if [[ -n "$LAST_INTERFACE" ]] && [[ -d "/sys/class/net/$LAST_INTERFACE" ]]; then
+        interface="$LAST_INTERFACE"
+    else
+        interface=$(detect_network_interface 2>/dev/null)
+    fi
+    
+    if [[ -z "$interface" ]] || [[ ! -d "/sys/class/net/$interface" ]]; then
+        echo -e "${DANGER}❌ 无法检测到有效的网络接口${RESET}"
+        read -p "按回车返回菜单..."
+        return
+    fi
+    
+    echo -e "${SUCCESS}✅ 使用网络接口：${WHITE}$interface${RESET}"
+    echo
+    
+    # 配置选项
+    echo -e "${PRIMARY}配置监控参数：${RESET}"
+    echo -e "${INFO}1. 刷新间隔 (1-10秒，推荐1秒)${RESET}"
+    read -p "请输入刷新间隔 [1]：" refresh_interval
+    refresh_interval=${refresh_interval:-1}
+    
+    if ! [[ "$refresh_interval" =~ ^[1-9]$ ]] || [[ $refresh_interval -gt 10 ]]; then
+        refresh_interval=1
+    fi
+    
+    echo -e "${INFO}2. 流量警告阈值 (MB/s，0表示禁用)${RESET}"
+    read -p "请输入下载速度警告阈值 [100]：" dl_threshold
+    dl_threshold=${dl_threshold:-100}
+    
+    read -p "请输入上传速度警告阈值 [50]：" ul_threshold
+    ul_threshold=${ul_threshold:-50}
+    
+    # 转换为字节
+    local dl_threshold_bytes=$((dl_threshold * 1024 * 1024))
+    local ul_threshold_bytes=$((ul_threshold * 1024 * 1024))
+    
+    echo -e "${INFO}3. 是否启用历史峰值记录？ [y/N]${RESET}"
+    read -p "" enable_history
+    local enable_history_flag=false
+    [[ "$enable_history" =~ ^[Yy]$ ]] && enable_history_flag=true
+    
+    echo
+    echo -e "${SUCCESS}✅ 配置完成，启动高级监控...${RESET}"
+    echo -e "${WARNING}按 Ctrl+C 退出监控${RESET}"
+    sleep 2
+    
+    # 启动高级监控
+    advanced_monitor_loop "$interface" "$refresh_interval" "$dl_threshold_bytes" "$ul_threshold_bytes" "$enable_history_flag"
+}
+
+# 高级监控主循环
+advanced_monitor_loop() {
+    local interface="$1"
+    local refresh_interval="$2"
+    local dl_threshold="$3"
+    local ul_threshold="$4"
+    local enable_history="$5"
+    
+    # 初始化变量
+    local RX_PREV=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+    local TX_PREV=$(cat "/sys/class/net/$interface/statistics/tx_bytes" 2>/dev/null || echo 0)
+    local RX_TOTAL=0 TX_TOTAL=0 DURATION=0
+    local RX_PEAK=0 TX_PEAK=0 RX_PEAK_TIME="" TX_PEAK_TIME=""
+    local ALERT_COUNT=0
+    
+    # 历史数据数组
+    local -a RX_HISTORY TX_HISTORY TIME_HISTORY
+    local HISTORY_SIZE=60  # 保留60个数据点
+    
+    # 颜色和符号
+    local SUCCESS="\e[38;5;46m" WARNING="\e[38;5;226m" DANGER="\e[38;5;196m"
+    local INFO="\e[38;5;117m" WHITE="\e[97m" RESET="\e[0m" PRIMARY="\e[38;5;39m"
+    
+    clear
+    echo -e "${PRIMARY}                          高级实时流量监控${RESET}"
+    echo -e "${INFO}              网络接口: ${WHITE}$interface${RESET} | 刷新间隔: ${WHITE}${refresh_interval}s${RESET}"
+    echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '═')"
+    echo -e "${WARNING}按 Ctrl+C 退出 | 按 s 保存数据 | 按 r 重置统计${RESET}"
+    echo
+    
+    trap 'echo -e "\n${WARNING}正在保存数据并退出...${RESET}"; save_monitor_data "$interface" "$RX_TOTAL" "$TX_TOTAL" "$DURATION" "$RX_PEAK" "$TX_PEAK"; exit 0' INT
+    
+    while true; do
+        sleep "$refresh_interval"
+        ((DURATION += refresh_interval))
+        
+        # 读取当前值
+        local RX_CUR=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+        local TX_CUR=$(cat "/sys/class/net/$interface/statistics/tx_bytes" 2>/dev/null || echo 0)
+        
+        # 计算速率
+        local RX_RATE=$((RX_CUR >= RX_PREV ? (RX_CUR - RX_PREV) / refresh_interval : 0))
+        local TX_RATE=$((TX_CUR >= TX_PREV ? (TX_CUR - TX_PREV) / refresh_interval : 0))
+        
+        # 防止异常值
+        [[ $RX_RATE -gt 1073741824 ]] && RX_RATE=0
+        [[ $TX_RATE -gt 1073741824 ]] && TX_RATE=0
+        
+        # 更新累计值
+        RX_PREV=$RX_CUR; TX_PREV=$TX_CUR
+        RX_TOTAL=$((RX_TOTAL + RX_RATE * refresh_interval))
+        TX_TOTAL=$((TX_TOTAL + TX_RATE * refresh_interval))
+        
+        # 更新峰值记录
+        if [[ $RX_RATE -gt $RX_PEAK ]]; then
+            RX_PEAK=$RX_RATE
+            RX_PEAK_TIME=$(date '+%H:%M:%S')
+        fi
+        
+        if [[ $TX_RATE -gt $TX_PEAK ]]; then
+            TX_PEAK=$TX_RATE
+            TX_PEAK_TIME=$(date '+%H:%M:%S')
+        fi
+        
+        # 历史数据记录
+        if [[ "$enable_history" == "true" ]]; then
+            RX_HISTORY+=($RX_RATE)
+            TX_HISTORY+=($TX_RATE)
+            TIME_HISTORY+=($(date '+%H:%M:%S'))
+            
+            # 限制历史数据大小
+            if [[ ${#RX_HISTORY[@]} -gt $HISTORY_SIZE ]]; then
+                RX_HISTORY=("${RX_HISTORY[@]:1}")
+                TX_HISTORY=("${TX_HISTORY[@]:1}")
+                TIME_HISTORY=("${TIME_HISTORY[@]:1}")
+            fi
+        fi
+        
+        # 阈值检查
+        local alert_msg=""
+        if [[ $dl_threshold -gt 0 ]] && [[ $RX_RATE -gt $dl_threshold ]]; then
+            alert_msg="${DANGER}⚠️ 下载速度超过阈值！${RESET}"
+            ((ALERT_COUNT++))
+        fi
+        
+        if [[ $ul_threshold -gt 0 ]] && [[ $TX_RATE -gt $ul_threshold ]]; then
+            alert_msg="${alert_msg} ${DANGER}⚠️ 上传速度超过阈值！${RESET}"
+            ((ALERT_COUNT++))
+        fi
+        
+        # 格式化显示
+        local rx_speed=$(format_bytes_per_sec $RX_RATE)
+        local tx_speed=$(format_bytes_per_sec $TX_RATE)
+        local rx_total=$(format_bytes $RX_TOTAL)
+        local tx_total=$(format_bytes $TX_TOTAL)
+        local rx_peak_speed=$(format_bytes_per_sec $RX_PEAK)
+        local tx_peak_speed=$(format_bytes_per_sec $TX_PEAK)
+        
+        # 计算运行时间
+        local hours=$((DURATION / 3600))
+        local mins=$(((DURATION % 3600) / 60))
+        local secs=$((DURATION % 60))
+        
+        # 计算平均值
+        local avg_rx=$(( DURATION > 0 ? RX_TOTAL / DURATION : 0 ))
+        local avg_tx=$(( DURATION > 0 ? TX_TOTAL / DURATION : 0 ))
+        local avg_rx_speed=$(format_bytes_per_sec $avg_rx)
+        local avg_tx_speed=$(format_bytes_per_sec $avg_tx)
+        
+        # 生成进度条
+        local max_speed=$(( RX_RATE > TX_RATE ? RX_RATE : TX_RATE ))
+        [[ $max_speed -lt $((10*1024*1024)) ]] && max_speed=$((10*1024*1024))
+        
+        local rx_bar=$(generate_bar $RX_RATE $max_speed 40)
+        local tx_bar=$(generate_bar $TX_RATE $max_speed 40)
+        
+        # 显示界面
+        printf "\033[2J\033[H"  # 清屏并移到顶部
+        echo -e "${PRIMARY}                          高级实时流量监控${RESET}"
+        echo -e "${INFO}              网络接口: ${WHITE}$interface${RESET} | 刷新间隔: ${WHITE}${refresh_interval}s${RESET}"
+        echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '═')"
+        echo
+        
+        # 当前速度
+        printf "${SUCCESS}下载: ${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET}\n" "$rx_speed" "$rx_bar"
+        printf "${INFO}上传: ${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET}\n" "$tx_speed" "$tx_bar"
+        echo
+        
+        # 统计信息
+        printf "${INFO}累计下载: ${WHITE}%-12s${RESET} | ${INFO}累计上传: ${WHITE}%-12s${RESET}\n" "$rx_total" "$tx_total"
+        printf "${INFO}平均下载: ${WHITE}%-12s${RESET} | ${INFO}平均上传: ${WHITE}%-12s${RESET}\n" "$avg_rx_speed" "$avg_tx_speed"
+        
+        if [[ -n "$RX_PEAK_TIME" ]] && [[ -n "$TX_PEAK_TIME" ]]; then
+            printf "${WARNING}峰值下载: ${WHITE}%-12s${RESET} @${WHITE}%s${RESET} | ${WARNING}峰值上传: ${WHITE}%-12s${RESET} @${WHITE}%s${RESET}\n" \
+                "$rx_peak_speed" "$RX_PEAK_TIME" "$tx_peak_speed" "$TX_PEAK_TIME"
+        fi
+        
+        printf "${PRIMARY}运行时长: ${WHITE}%02d:%02d:%02d${RESET}" $hours $mins $secs
+        [[ $ALERT_COUNT -gt 0 ]] && printf " | ${DANGER}警告次数: ${WHITE}%d${RESET}" $ALERT_COUNT
+        echo
+        
+        # 显示警告信息
+        [[ -n "$alert_msg" ]] && echo -e "$alert_msg"
+        
+        # 显示历史趋势（简单ASCII图）
+        if [[ "$enable_history" == "true" ]] && [[ ${#RX_HISTORY[@]} -gt 10 ]]; then
+            echo
+            echo -e "${INFO}流量趋势 (最近${#RX_HISTORY[@]}个数据点):${RESET}"
+            display_ascii_chart "${RX_HISTORY[*]}" "下载"
+        fi
+        
+        echo
+        echo -e "${GRAY}按 Ctrl+C 退出 | s:保存数据 | r:重置统计${RESET}"
+    done
+}
+
+# 字节格式化函数 - 优化版
+format_bytes_per_sec() {
+    local bytes=$1
+    if [[ $bytes -ge 1073741824 ]]; then
+        printf "%.2f GB/s" "$(echo "scale=2; $bytes/1073741824" | bc 2>/dev/null || echo "$((bytes/1073741824))")"
+    elif [[ $bytes -ge 1048576 ]]; then
+        printf "%.2f MB/s" "$(echo "scale=2; $bytes/1048576" | bc 2>/dev/null || echo "$((bytes/1048576))")"
+    elif [[ $bytes -ge 1024 ]]; then
+        printf "%.2f KB/s" "$(echo "scale=2; $bytes/1024" | bc 2>/dev/null || echo "$((bytes/1024))")"
+    else
+        printf "%d B/s" "$bytes"
+    fi
+}
+
+format_bytes() {
+    local bytes=$1
+    if [[ $bytes -ge 1073741824 ]]; then
+        printf "%.2f GB" "$(echo "scale=2; $bytes/1073741824" | bc 2>/dev/null || echo "$((bytes/1073741824))")"
+    elif [[ $bytes -ge 1048576 ]]; then
+        printf "%.2f MB" "$(echo "scale=2; $bytes/1048576" | bc 2>/dev/null || echo "$((bytes/1048576))")"
+    elif [[ $bytes -ge 1024 ]]; then
+        printf "%.2f KB" "$(echo "scale=2; $bytes/1024" | bc 2>/dev/null || echo "$((bytes/1024))")"
+    else
+        printf "%d B" "$bytes"
+    fi
+}
+
+# 生成进度条
+generate_bar() {
+    local current=$1
+    local max=$2
+    local width=${3:-50}
+    
+    local fill=$((current * width / max))
+    [[ $fill -gt $width ]] && fill=$width
+    [[ $fill -lt 0 ]] && fill=0
+    
+    printf "["
+    for ((i=0; i<fill; i++)); do printf "█"; done
+    for ((i=fill; i<width; i++)); do printf "░"; done
+    printf "]"
+}
+
+# 简单ASCII图表显示
+display_ascii_chart() {
+    local data=($1)
+    local label="$2"
+    local max_val=0
+    
+    # 找到最大值
+    for val in "${data[@]}"; do
+        [[ $val -gt $max_val ]] && max_val=$val
+    done
+    
+    [[ $max_val -eq 0 ]] && max_val=1
+    
+    local chart_height=5
+    printf "${INFO}%s趋势: " "$label"
+    
+    for val in "${data[@]:(-20)}"; do  # 只显示最后20个数据点
+        local bar_height=$(( val * chart_height / max_val ))
+        [[ $bar_height -eq 0 ]] && [[ $val -gt 0 ]] && bar_height=1
+        
+        case $bar_height in
+            0) printf "▁" ;;
+            1) printf "▂" ;;
+            2) printf "▃" ;;
+            3) printf "▅" ;;
+            4) printf "▆" ;;
+            *) printf "▇" ;;
+        esac
+    done
+    echo -e "${RESET}"
+}
+
+# 保存监控数据
+save_monitor_data() {
+    local interface="$1" rx_total="$2" tx_total="$3" duration="$4" rx_peak="$5" tx_peak="$6"
+    local data_file="/root/milier_monitor_data.log"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    {
+        echo "==============================="
+        echo "监控数据保存 - $timestamp"
+        echo "网络接口: $interface"
+        echo "监控时长: $duration 秒"
+        echo "累计下载: $(format_bytes $rx_total)"
+        echo "累计上传: $(format_bytes $tx_total)"
+        echo "峰值下载速度: $(format_bytes_per_sec $rx_peak)"
+        echo "峰值上传速度: $(format_bytes_per_sec $tx_peak)"
+        echo "平均下载速度: $(format_bytes_per_sec $((rx_total / duration)))"
+        echo "平均上传速度: $(format_bytes_per_sec $((tx_total / duration)))"
+        echo "==============================="
+        echo
+    } >> "$data_file"
+    
+    echo -e "${SUCCESS}✅ 数据已保存到: $data_file${RESET}"
+}
+
+# 检查更新功能
+check_update() {
+    clear
+    echo -e "${PRIMARY}检查脚本更新${RESET}"
+    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '═')${RESET}"
+    echo
+    
+    echo -e "${INFO}正在检查更新...${RESET}"
+    
+    # 获取当前版本
+    local current_version="v2.0"
+    local script_url="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
+    local temp_file="/tmp/milier_latest_check.sh"
+    
+    # 下载最新版本检查
+    if curl -fsSL "$script_url" -o "$temp_file" --max-time 15; then
+        echo -e "${SUCCESS}✅ 获取最新版本信息成功${RESET}"
+        
+        # 简单版本检查（通过文件大小和修改时间）
+        local current_size=$(stat -c%s "$0" 2>/dev/null || echo 0)
+        local latest_size=$(stat -c%s "$temp_file" 2>/dev/null || echo 0)
+        local size_diff=$(( latest_size > current_size ? latest_size - current_size : current_size - latest_size ))
+        
+        echo -e "${INFO}当前版本：${WHITE}$current_version${RESET}"
+        echo -e "${INFO}当前脚本大小：${WHITE}$(format_file_size $current_size)${RESET}"
+        echo -e "${INFO}最新脚本大小：${WHITE}$(format_file_size $latest_size)${RESET}"
+        
+        if [[ $size_diff -gt 1024 ]]; then
+            echo -e "${WARNING}⚠️  发现更新（大小差异：$(format_file_size $size_diff)）${RESET}"
+            echo
+            echo -e "${INFO}是否要更新到最新版本？${RESET}"
+            echo -e "${WARNING}注意：更新会覆盖当前脚本，但配置文件会保留${RESET}"
+            echo
+            read -p "确认更新？ (y/N): " confirm_update
+            
+            if [[ "$confirm_update" =~ ^[Yy]$ ]]; then
+                echo -e "${INFO}正在备份当前脚本...${RESET}"
+                cp "$0" "${0}.backup.$(date +%Y%m%d_%H%M%S)"
+                
+                echo -e "${INFO}正在更新脚本...${RESET}"
+                if cp "$temp_file" "$0" && chmod +x "$0"; then
+                    echo -e "${SUCCESS}✅ 更新完成！${RESET}"
+                    echo -e "${WARNING}请重新启动脚本以使用新版本${RESET}"
+                    echo
+                    read -p "现在重启脚本？ (Y/n): " restart_now
+                    if [[ ! "$restart_now" =~ ^[Nn]$ ]]; then
+                        exec bash "$0"
+                    fi
+                else
+                    echo -e "${DANGER}❌ 更新失败，已恢复备份${RESET}"
+                    cp "${0}.backup.$(date +%Y%m%d_%H%M%S | head -1)" "$0" 2>/dev/null
+                fi
+            else
+                echo -e "${INFO}已取消更新${RESET}"
+            fi
+        else
+            echo -e "${SUCCESS}✅ 您已经使用的是最新版本！${RESET}"
+        fi
+        
+        rm -f "$temp_file"
+    else
+        echo -e "${DANGER}❌ 无法连接到更新服务器${RESET}"
+        echo -e "${INFO}请检查网络连接或稍后再试${RESET}"
+    fi
+    
+    echo
+    read -p "按回车返回菜单..."
+}
+
+# 格式化文件大小
+format_file_size() {
+    local size=$1
+    if [[ $size -ge 1048576 ]]; then
+        printf "%.2f MB" "$(echo "scale=2; $size/1048576" | bc 2>/dev/null || echo "$((size/1048576))")"
+    elif [[ $size -ge 1024 ]]; then
+        printf "%.2f KB" "$(echo "scale=2; $size/1024" | bc 2>/dev/null || echo "$((size/1024))")"
+    else
+        printf "%d B" "$size"
+    fi
+}
+
 # 卸载服务
 uninstall_service() {
     clear
@@ -968,8 +1449,20 @@ show_menu() {
     echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '=')"
     echo
 
-    # 服务状态
+    # 服务状态和系统信息
     get_service_info
+    echo
+    
+    # 系统信息
+    echo -e "${ACCENT}系统信息${RESET}"
+    echo -e "${ACCENT}$(printf '%*s' 20 | tr ' ' '─')${RESET}"
+    get_system_info
+    
+    # 使用统计
+    load_config
+    if [[ -n "$USAGE_COUNT" ]] && [[ $USAGE_COUNT -gt 0 ]]; then
+        printf "${INFO}使用次数：${WHITE}%-8s${RESET}    ${INFO}最后使用：${WHITE}%-20s${RESET}\n" "$USAGE_COUNT" "${LAST_USED:-未知}"
+    fi
     echo
     
 
@@ -994,11 +1487,13 @@ show_menu() {
     echo -e "${INFO}5) 查看服务日志${RESET}"
     echo -e "${SECONDARY}6) 快捷键管理${RESET}"
     echo -e "${ACCENT}8) 测试监控功能${RESET}"
+    echo -e "${SECONDARY}9) 高级监控${RESET}"
+    echo -e "${WARNING}A) 检查更新${RESET}"
     echo -e "${DANGER}7) 卸载全部服务${RESET}"
     echo -e "${GRAY}0) 退出程序${RESET}"
     echo
     
-    read -p "请选择操作 [0-8]：" choice
+    read -p "请选择操作 [0-9,A]：" choice
     
     case $choice in
         1) start_service ;;
@@ -1009,6 +1504,8 @@ show_menu() {
         6) shortcut_management ;;
         7) uninstall_service ;;
         8) test_monitor ;;
+        9) advanced_monitor ;;
+        [Aa]) check_update ;;
         0) 
             clear
             echo
@@ -1020,7 +1517,7 @@ show_menu() {
             exit 0
             ;;
         *) 
-            echo -e "${DANGER}❌ 无效选项，请输入 0-8${RESET}"
+            echo -e "${DANGER}❌ 无效选项，请输入 0-9 或 A${RESET}"
             sleep 1
             ;;
     esac
