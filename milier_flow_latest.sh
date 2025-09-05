@@ -531,7 +531,7 @@ sleep 1
 clear
 echo -e "${PRIMARY}                                实时流量监控${RESET}"
 echo -e "${INFO}                          网络接口：${WHITE}$INTERFACE${RESET}"
-echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '=')"
+echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
 echo -e "${WARNING}按 Ctrl+C 退出监控${RESET}"
 echo
 
@@ -661,7 +661,7 @@ EOF
 start_service() {
     clear
     echo -e "${PRIMARY}配置流量消耗参数${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
     
     load_config
@@ -692,9 +692,10 @@ start_service() {
     # 确认配置
     echo
     echo -e "${PRIMARY}配置确认${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 20 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
     printf "${INFO}%-12s${WHITE}%s${RESET}\n" "下载URL：" "$url"
     printf "${INFO}%-12s${WHITE}%s${RESET}\n" "线程数量：" "$threads"
+    echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo
     read -p "确认启动？(Y/n)：" confirm
     [[ "$confirm" =~ ^[Nn]$ ]] && return
@@ -830,7 +831,7 @@ show_logs() {
     
     clear
     echo -e "${PRIMARY}服务日志${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 20 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo -e "${INFO}按 'q' 退出${RESET}"
     echo
     tail -50 "$LOG_FILE" | less -R
@@ -840,7 +841,7 @@ show_logs() {
 shortcut_management() {
     clear
     echo -e "${PRIMARY}快捷键管理${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 20 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
     
     local current_shortcut=$(get_shortcut_name)
@@ -907,7 +908,7 @@ shortcut_management() {
 test_monitor() {
     clear
     echo -e "${PRIMARY}监控功能测试${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
     
     echo -e "${INFO}正在执行监控功能诊断...${RESET}"
@@ -1027,7 +1028,7 @@ TESTEOF
 advanced_monitor() {
     clear
     echo -e "${PRIMARY}高级流量监控${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '═')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
     
     # 获取网络接口
@@ -1110,7 +1111,7 @@ advanced_monitor_loop() {
     clear
     echo -e "${PRIMARY}                          高级实时流量监控${RESET}"
     echo -e "${INFO}              网络接口: ${WHITE}$interface${RESET} | 刷新间隔: ${WHITE}${refresh_interval}s${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '═')"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo -e "${WARNING}按 Ctrl+C 退出 | 按 s 保存数据 | 按 r 重置统计${RESET}"
     echo
     
@@ -1204,7 +1205,7 @@ advanced_monitor_loop() {
         printf "\033[2J\033[H"  # 清屏并移到顶部
         echo -e "${PRIMARY}                          高级实时流量监控${RESET}"
         echo -e "${INFO}              网络接口: ${WHITE}$interface${RESET} | 刷新间隔: ${WHITE}${refresh_interval}s${RESET}"
-        echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '═')"
+        echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
         echo
         
         # 当前速度
@@ -1236,6 +1237,7 @@ advanced_monitor_loop() {
         fi
         
         echo
+        echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
         echo -e "${GRAY}按 Ctrl+C 退出 | s:保存数据 | r:重置统计${RESET}"
     done
 }
@@ -1343,7 +1345,7 @@ save_monitor_data() {
 check_update() {
     clear
     echo -e "${PRIMARY}检查脚本更新${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 30 | tr ' ' '═')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
     
     echo -e "${INFO}正在检查更新...${RESET}"
@@ -1424,7 +1426,7 @@ format_file_size() {
 uninstall_service() {
     clear
     echo -e "${DANGER}危险操作警告${RESET}"
-    echo -e "${DANGER}$(printf '%*s' 30 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
     echo -e "${WARNING}此操作将删除所有服务、文件和配置（不可恢复）${RESET}"
     echo
@@ -1446,7 +1448,7 @@ show_menu() {
     echo
     echo -e "${PRIMARY}                            米粒儿VPS流量消耗管理工具${RESET}"
     echo -e "${SECONDARY}                                    v2.0${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 80 | tr ' ' '=')"
+    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
 
     # 服务状态和系统信息
@@ -1455,7 +1457,7 @@ show_menu() {
     
     # 系统信息
     echo -e "${ACCENT}系统信息${RESET}"
-    echo -e "${ACCENT}$(printf '%*s' 20 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
     get_system_info
     
     # 使用统计
@@ -1464,12 +1466,10 @@ show_menu() {
         printf "${INFO}使用次数：${WHITE}%-8s${RESET}    ${INFO}最后使用：${WHITE}%-20s${RESET}\n" "$USAGE_COUNT" "${LAST_USED:-未知}"
     fi
     echo
-    
-
 
     # 官方联系方式 - 简洁排列，统一颜色
     echo -e "${ACCENT}官方联系方式${RESET}"
-    echo -e "${ACCENT}$(printf '%*s' 30 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
     printf "${INFO}%-12s${LINK}%-35s${RESET} ${INFO}%-12s${LINK}%-20s${RESET}\n" \
         "📱 TG群：" "https://t.me/mlkjfx6" \
         "🌐 博客：" "https://ooovps.com"
@@ -1479,7 +1479,7 @@ show_menu() {
 
     # 操作菜单 - 竖排布局
     echo -e "${PRIMARY}操作菜单${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 20 | tr ' ' '─')${RESET}"
+    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
     echo -e "${SUCCESS}1) 启动流量消耗服务${RESET}"
     echo -e "${DANGER}2) 停止流量消耗服务${RESET}"
     echo -e "${INFO}3) 实时流量监控${RESET}"
@@ -1491,6 +1491,7 @@ show_menu() {
     echo -e "${WARNING}A) 检查更新${RESET}"
     echo -e "${DANGER}7) 卸载全部服务${RESET}"
     echo -e "${GRAY}0) 退出程序${RESET}"
+    echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo
     
     read -p "请选择操作 [0-9,A]：" choice
