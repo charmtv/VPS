@@ -6,7 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-VERSION="v3.0"
+SCRIPT_VERSION="v3.0"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
 MONITOR_SCRIPT="/root/milier_monitor.sh"
@@ -670,27 +670,38 @@ start_service() {
     # URL选择菜单
     echo -e "${INFO}  请选择下载URL：${RESET}"
     echo
-    echo -e "    ${SUCCESS}[1]${RESET} ${WHITE}Cloudflare 100MB${RESET}  ${GRAY}(默认，推荐)${RESET}"
-    echo -e "    ${SUCCESS}[2]${RESET} ${WHITE}Cloudflare 1GB${RESET}    ${GRAY}(大文件模式)${RESET}"
-    echo -e "    ${SUCCESS}[3]${RESET} ${WHITE}Cloudflare 10GB${RESET}   ${GRAY}(超大文件模式)${RESET}"
+    echo -e "    ${GRAY}── 亚洲节点 ──${RESET}"
+    echo -e "    ${SUCCESS}[1]${RESET} ${WHITE}香港 Datapacket 100MB${RESET}      ${GRAY}(推荐，低延迟)${RESET}"
+    echo -e "    ${SUCCESS}[2]${RESET} ${WHITE}日本东京 Datapacket 100MB${RESET}  ${GRAY}(亚洲优选)${RESET}"
+    echo -e "    ${SUCCESS}[3]${RESET} ${WHITE}新加坡 OVH 1GB${RESET}            ${GRAY}(大文件模式)${RESET}"
+    echo
+    echo -e "    ${GRAY}── 欧美节点 ──${RESET}"
+    echo -e "    ${SUCCESS}[4]${RESET} ${WHITE}德国 Hetzner 1GB${RESET}           ${GRAY}(欧洲高速)${RESET}"
+    echo -e "    ${SUCCESS}[5]${RESET} ${WHITE}美西 洛杉矶 Datapacket 1GB${RESET} ${GRAY}(北美)${RESET}"
+    echo -e "    ${SUCCESS}[6]${RESET} ${WHITE}法国 OVH 10GB${RESET}             ${GRAY}(超大文件)${RESET}"
+    echo
+    echo -e "    ${GRAY}── 其他 ──${RESET}"
     if [[ -n "$LAST_URL" ]]; then
-        echo -e "    ${SUCCESS}[4]${RESET} ${WHITE}上次使用${RESET}          ${GRAY}$LAST_URL${RESET}"
+        echo -e "    ${SUCCESS}[7]${RESET} ${WHITE}上次使用${RESET}               ${GRAY}$LAST_URL${RESET}"
     fi
-    echo -e "    ${SUCCESS}[5]${RESET} ${WHITE}自定义URL${RESET}"
+    echo -e "    ${SUCCESS}[8]${RESET} ${WHITE}自定义URL${RESET}"
     echo
     read -p "  请选择 [1]: " url_choice
     url_choice=${url_choice:-1}
     
     case $url_choice in
-        1) url="https://speed.cloudflare.com/__down?bytes=104857600" ;;
-        2) url="https://speed.cloudflare.com/__down?bytes=1073741824" ;;
-        3) url="https://speed.cloudflare.com/__down?bytes=10737418240" ;;
-        4) url="${LAST_URL:-https://speed.cloudflare.com/__down?bytes=104857600}" ;;
-        5) 
+        1) url="http://hkg.download.datapacket.com/100mb.bin" ;;
+        2) url="http://tyo.download.datapacket.com/100mb.bin" ;;
+        3) url="https://sgp.proof.ovh.net/files/1Gb.dat" ;;
+        4) url="https://nbg1-speed.hetzner.com/1GB.bin" ;;
+        5) url="http://lax.download.datapacket.com/1000mb.bin" ;;
+        6) url="https://gra.proof.ovh.net/files/10Gb.dat" ;;
+        7) url="${LAST_URL:-http://hkg.download.datapacket.com/100mb.bin}" ;;
+        8) 
             read -p "  请输入自定义URL：" url
-            url=${url:-"https://speed.cloudflare.com/__down?bytes=104857600"}
+            url=${url:-"http://hkg.download.datapacket.com/100mb.bin"}
             ;;
-        *) url="https://speed.cloudflare.com/__down?bytes=104857600" ;;
+        *) url="http://hkg.download.datapacket.com/100mb.bin" ;;
     esac
     
     # 线程数配置
@@ -1382,7 +1393,7 @@ check_update() {
     echo -e "${INFO}正在检查更新...${RESET}"
     
     # 获取当前版本
-    local current_version="$VERSION"
+    local current_version="$SCRIPT_VERSION"
     local script_url="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
     local temp_file="/tmp/milier_latest_check.sh"
     
@@ -1606,15 +1617,15 @@ speed_test() {
     echo
     
     echo -e "  ${INFO}正在测试下载速度...${RESET}"
-    echo -e "  ${GRAY}测试文件：Cloudflare 100MB${RESET}"
+    echo -e "  ${GRAY}测试文件：香港 Datapacket（取前10MB）${RESET}"
     echo
     
     local start_time=$(date +%s%N)
     local bytes_downloaded=0
     
     # 下载测试 (10MB快速测试)
-    local test_url="https://speed.cloudflare.com/__down?bytes=10485760"
-    bytes_downloaded=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 --connect-timeout 5 "$test_url" 2>/dev/null)
+    local test_url="http://hkg.download.datapacket.com/100mb.bin"
+    bytes_downloaded=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 --connect-timeout 5 -r 0-10485759 "$test_url" 2>/dev/null)
     local end_time=$(date +%s%N)
     
     if [[ -n "$bytes_downloaded" ]] && [[ "$bytes_downloaded" -gt 0 ]] 2>/dev/null; then
@@ -1694,29 +1705,30 @@ get_target_summary() {
 show_menu() {
     clear
     
-    # ╔══ 标题区 ══╗
+    # 标题区 - 不使用右边框，避免对齐问题
     echo
-    echo -e "${PRIMARY}${BOLD}    ╔══════════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${PRIMARY}${BOLD}    ║${RESET}          ${WHITE}${BOLD}🚀  米粒儿VPS流量消耗管理工具${RESET}  ${SECONDARY}${VERSION}${RESET}            ${PRIMARY}${BOLD}║${RESET}"
-    echo -e "${PRIMARY}${BOLD}    ║${RESET}             ${LINK}官方TG群：https://t.me/mlkjfx6${RESET}              ${PRIMARY}${BOLD}║${RESET}"
-    echo -e "${PRIMARY}${BOLD}    ╚══════════════════════════════════════════════════════════════════╝${RESET}"
+    echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo -e "  ${WHITE}${BOLD}         米粒儿VPS流量消耗管理工具  ${SECONDARY}${SCRIPT_VERSION}${RESET}"
+    echo -e "  ${LINK}            官方TG群: https://t.me/mlkjfx6${RESET}"
+    echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
     echo
 
-    # ┌── 状态区 ──┐
+    # 系统概况
     local status_badge=$(get_status_badge)
     local target_summary=$(get_target_summary)
     
-    echo -e "    ${GRAY}┌─${RESET} ${WHITE}${BOLD}💻 系统概况${RESET} ${GRAY}───────────────────────────────────────────────────┐${RESET}"
+    echo -e "  ${WHITE}${BOLD}[系统概况]${RESET}"
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
     
     # 服务状态行
     local pid_info=""
     if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
         local pid=$(systemctl show -p MainPID --value $SERVICE_NAME 2>/dev/null)
-        pid_info="  ${INFO}PID：${WHITE}${pid:-N/A}${RESET}"
+        pid_info="  ${INFO}PID: ${WHITE}${pid:-N/A}${RESET}"
     fi
-    echo -e "    ${GRAY}│${RESET}  ${INFO}服务：${RESET}${status_badge}${pid_info}    ${target_summary}"
+    echo -e "  ${INFO}服务: ${RESET}${status_badge}${pid_info}    ${target_summary}"
     
-    # 系统信息 - 紧凑布局
+    # 系统信息
     local hostname=$(hostname 2>/dev/null || echo "未知")
     local cpu_cores=$(nproc 2>/dev/null || echo "?")
     local mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.1f", $3/1024}' || echo "?")
@@ -1725,57 +1737,54 @@ show_menu() {
     local load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "未知")
     local interfaces_count=$(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-" | wc -l || echo 0)
     
-    printf "    ${GRAY}│${RESET}  ${INFO}主机：${WHITE}%-14s${RESET} ${INFO}CPU：${WHITE}%-6s${RESET} ${INFO}内存：${WHITE}%s/%sGB${RESET}\n" \
-        "$hostname" "${cpu_cores}核" "$mem_used" "$mem_total"
-    printf "    ${GRAY}│${RESET}  ${INFO}磁盘：${WHITE}%-14s${RESET} ${INFO}接口：${WHITE}%-6s${RESET} ${INFO}负载：${WHITE}%s${RESET}\n" \
-        "$disk_usage" "$interfaces_count" "$load_avg"
+    echo -e "  ${INFO}主机: ${WHITE}${hostname}${RESET}    ${INFO}CPU: ${WHITE}${cpu_cores}核${RESET}    ${INFO}内存: ${WHITE}${mem_used}/${mem_total}GB${RESET}"
+    echo -e "  ${INFO}磁盘: ${WHITE}${disk_usage}${RESET}  ${INFO}接口: ${WHITE}${interfaces_count}${RESET}    ${INFO}负载: ${WHITE}${load_avg}${RESET}"
 
     # 使用统计
     load_config
     if [[ -n "$USAGE_COUNT" ]] && [[ $USAGE_COUNT -gt 0 ]]; then
-        printf "    ${GRAY}│${RESET}  ${INFO}使用：${WHITE}%-14s${RESET} ${INFO}最后：${WHITE}%s${RESET}\n" "${USAGE_COUNT}次" "${LAST_USED:-未知}"
+        echo -e "  ${INFO}使用: ${WHITE}${USAGE_COUNT}次${RESET}          ${INFO}最后: ${WHITE}${LAST_USED:-未知}${RESET}"
     fi
-    echo -e "    ${GRAY}└──────────────────────────────────────────────────────────────────┘${RESET}"
     echo
 
-    # ⚡ 服务控制
-    echo -e "    ${GRAY}──${RESET} ${SUCCESS}${BOLD}⚡ 服务控制${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
-    echo
-    echo -e "       ${SUCCESS}[1]${RESET}  ▸ 启动流量消耗服务"
-    echo -e "       ${DANGER}[2]${RESET}  ▸ 停止流量消耗服务"
-    echo -e "       ${WARNING}[3]${RESET}  ▸ 重启流量消耗服务"
-    echo -e "       ${ACCENT}[4]${RESET}  ▸ 流量消耗目标设置          ${GRAY}NEW${RESET}"
-    echo
-
-    # 📊 监控工具
-    echo -e "    ${GRAY}──${RESET} ${PRIMARY}${BOLD}📊 监控工具${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
-    echo
-    echo -e "       ${PRIMARY}[5]${RESET}  ▸ 实时流量监控"
-    echo -e "       ${SECONDARY}[6]${RESET}  ▸ 高级流量监控"
-    echo -e "       ${INFO}[7]${RESET}  ▸ 监控功能诊断"
-    echo -e "       ${LINK}[8]${RESET}  ▸ 网络速度测试              ${GRAY}NEW${RESET}"
+    # 服务控制
+    echo -e "  ${SUCCESS}${BOLD}[服务控制]${RESET}"
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "   ${SUCCESS}[1]${RESET} 启动流量消耗服务"
+    echo -e "   ${DANGER}[2]${RESET} 停止流量消耗服务"
+    echo -e "   ${WARNING}[3]${RESET} 重启流量消耗服务"
+    echo -e "   ${ACCENT}[4]${RESET} 流量消耗目标设置          ${GRAY}NEW${RESET}"
     echo
 
-    # 🔧 系统管理
-    echo -e "    ${GRAY}──${RESET} ${WARNING}${BOLD}🔧 系统管理${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
-    echo
-    echo -e "       ${INFO}[9]${RESET}  ▸ 查看服务日志"
-    echo -e "       ${SECONDARY}[A]${RESET}  ▸ 快捷键管理"
-    echo -e "       ${WARNING}[B]${RESET}  ▸ 检查脚本更新"
-    echo -e "       ${DANGER}[U]${RESET}  ▸ 卸载全部服务"
-    echo
-
-    # 📱 联系方式
-    echo -e "    ${GRAY}──${RESET} ${ACCENT}${BOLD}📱 联系我们${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
-    printf "    ${GRAY}  ${RESET} ${LINK}TG群：t.me/mlkjfx6${RESET}  ${GRAY}│${RESET}  ${LINK}博客：ooovps.com${RESET}  ${GRAY}│${RESET}  ${LINK}论坛：nodeloc.com${RESET}\n"
+    # 监控工具
+    echo -e "  ${PRIMARY}${BOLD}[监控工具]${RESET}"
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "   ${PRIMARY}[5]${RESET} 实时流量监控"
+    echo -e "   ${SECONDARY}[6]${RESET} 高级流量监控"
+    echo -e "   ${INFO}[7]${RESET} 监控功能诊断"
+    echo -e "   ${LINK}[8]${RESET} 网络速度测试              ${GRAY}NEW${RESET}"
     echo
 
-    echo -e "    ${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
-    echo -e "       ${GRAY}[0]${RESET}  退出程序"
-    echo -e "    ${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
+    # 系统管理
+    echo -e "  ${WARNING}${BOLD}[系统管理]${RESET}"
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "   ${INFO}[9]${RESET} 查看服务日志"
+    echo -e "   ${SECONDARY}[A]${RESET} 快捷键管理"
+    echo -e "   ${WARNING}[B]${RESET} 检查脚本更新"
+    echo -e "   ${DANGER}[U]${RESET} 卸载全部服务"
+    echo
+
+    # 联系方式
+    echo -e "  ${ACCENT}${BOLD}[联系我们]${RESET}"
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${LINK}TG群: t.me/mlkjfx6  ${GRAY}|${RESET}  ${LINK}博客: ooovps.com  ${GRAY}|${RESET}  ${LINK}论坛: nodeloc.com${RESET}"
+    echo
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "   ${GRAY}[0]${RESET} 退出程序"
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
     echo
     
-    read -p "    请选择操作 ▶ " choice
+    read -p "  请选择操作 > " choice
     
     case $choice in
         1) start_service ;;
@@ -1793,18 +1802,18 @@ show_menu() {
         0) 
             clear
             echo
-            echo -e "${PRIMARY}${BOLD}    ╔══════════════════════════════════════════════════════════════════╗${RESET}"
-            echo -e "${PRIMARY}${BOLD}    ║${RESET}                                                                  ${PRIMARY}${BOLD}║${RESET}"
-            echo -e "${PRIMARY}${BOLD}    ║${RESET}          ${SUCCESS}${BOLD}感谢使用米粒儿VPS流量消耗管理工具！${RESET}              ${PRIMARY}${BOLD}║${RESET}"
-            echo -e "${PRIMARY}${BOLD}    ║${RESET}                                                                  ${PRIMARY}${BOLD}║${RESET}"
-            echo -e "${PRIMARY}${BOLD}    ║${RESET}       ${LINK}欢迎加入官方TG群：https://t.me/mlkjfx6${RESET}            ${PRIMARY}${BOLD}║${RESET}"
-            echo -e "${PRIMARY}${BOLD}    ║${RESET}                                                                  ${PRIMARY}${BOLD}║${RESET}"
-            echo -e "${PRIMARY}${BOLD}    ╚══════════════════════════════════════════════════════════════════╝${RESET}"
+            echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+            echo
+            echo -e "  ${SUCCESS}${BOLD}      感谢使用米粒儿VPS流量消耗管理工具!${RESET}"
+            echo
+            echo -e "  ${LINK}      欢迎加入官方TG群: https://t.me/mlkjfx6${RESET}"
+            echo
+            echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
             echo
             exit 0
             ;;
         *) 
-            echo -e "    ${DANGER}❌ 无效选项${RESET}"
+            echo -e "  ${DANGER}无效选项${RESET}"
             sleep 1
             ;;
     esac
