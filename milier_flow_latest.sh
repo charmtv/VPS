@@ -529,29 +529,21 @@ fi
 echo -e "${INFO}准备启动监控界面...${RESET}"
 sleep 1
 
-clear
-echo -e "${PRIMARY}                                实时流量监控${RESET}"
-echo -e "${INFO}                          网络接口：${WHITE}$INTERFACE${RESET}"
-echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
-echo -e "${WARNING}按 Ctrl+C 退出监控${RESET}"
-echo
-
 # 设置信号处理
-trap 'echo -e "\n${WARNING}监控已停止${RESET}"; exit 0' INT TERM
+trap 'printf "\033[2J\033[H"; echo -e "${WARNING}监控已停止${RESET}"; echo; exit 0' INT TERM
 
 # 主监控循环
-echo -e "${SUCCESS}开始监控循环...${RESET}"
-LOOP_COUNT=0
+RX_PEAK=0; TX_PEAK=0
 
 while true; do
     sleep 1
     ((DURATION++))
-    ((LOOP_COUNT++))
     
     # 定期检查接口是否仍然存在
-    if [[ $((LOOP_COUNT % 30)) -eq 0 ]]; then
+    if [[ $((DURATION % 30)) -eq 0 ]]; then
         if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
-            echo -e "\n${DANGER}❌ 网络接口 $INTERFACE 已不存在${RESET}"
+            printf "\033[2J\033[H"
+            echo -e "${DANGER}网络接口 $INTERFACE 已不存在${RESET}"
             break
         fi
     fi
@@ -560,36 +552,30 @@ while true; do
     RX_CUR=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/rx_bytes")
     TX_CUR=$(safe_read_bytes "/sys/class/net/$INTERFACE/statistics/tx_bytes")
     
-    # 调试输出（前3次循环）
-    if [[ $LOOP_COUNT -le 3 ]]; then
-        echo -e "${INFO}Loop $LOOP_COUNT - Current: RX=$RX_CUR, TX=$TX_CUR, Prev: RX=$RX_PREV, TX=$TX_PREV${RESET}"
-    fi
-    
     # 计算速率（防止负数和异常值）
     if [[ "$RX_CUR" =~ ^[0-9]+$ ]] && [[ "$TX_CUR" =~ ^[0-9]+$ ]] && [[ "$RX_PREV" =~ ^[0-9]+$ ]] && [[ "$TX_PREV" =~ ^[0-9]+$ ]]; then
         RX_RATE=$((RX_CUR >= RX_PREV ? RX_CUR - RX_PREV : 0))
         TX_RATE=$((TX_CUR >= TX_PREV ? TX_CUR - TX_PREV : 0))
-        
-        # 防止异常大值（可能是计数器重置）
-        [[ $RX_RATE -gt 1073741824 ]] && RX_RATE=0  # 1GB/s限制
+        [[ $RX_RATE -gt 1073741824 ]] && RX_RATE=0
         [[ $TX_RATE -gt 1073741824 ]] && TX_RATE=0
     else
-        echo -e "\n${WARNING}数据读取异常，跳过此次统计${RESET}"
         RX_RATE=0; TX_RATE=0
     fi
     
-    # 更新累计值
+    # 更新累计值和峰值
     RX_PREV=$RX_CUR; TX_PREV=$TX_CUR
     RX_TOTAL=$((RX_TOTAL + RX_RATE)); TX_TOTAL=$((TX_TOTAL + TX_RATE))
+    [[ $RX_RATE -gt $RX_PEAK ]] && RX_PEAK=$RX_RATE
+    [[ $TX_RATE -gt $TX_PEAK ]] && TX_PEAK=$TX_RATE
     
     # 格式化显示数据
     RX_SPEED=$(format_speed $RX_RATE 2>/dev/null || echo "0 B/s")
     TX_SPEED=$(format_speed $TX_RATE 2>/dev/null || echo "0 B/s")
-    RX_TOTAL_DISPLAY=$(format_total $RX_TOTAL 2>/dev/null || echo "0 KB")
-    TX_TOTAL_DISPLAY=$(format_total $TX_TOTAL 2>/dev/null || echo "0 KB")
+    RX_TOTAL_FMT=$(format_total $RX_TOTAL 2>/dev/null || echo "0 KB")
+    TX_TOTAL_FMT=$(format_total $TX_TOTAL 2>/dev/null || echo "0 KB")
     
     # 动态调整最大速度刻度
-    MAX_SPEED=$((10*1024*1024))  # 默认10MB/s
+    MAX_SPEED=$((10*1024*1024))
     [[ $RX_RATE -gt $MAX_SPEED ]] && MAX_SPEED=$RX_RATE
     [[ $TX_RATE -gt $MAX_SPEED ]] && MAX_SPEED=$TX_RATE
     
@@ -604,21 +590,39 @@ while true; do
     AVG_RX=$(( DURATION > 0 ? RX_TOTAL / DURATION : 0 ))
     AVG_TX=$(( DURATION > 0 ? TX_TOTAL / DURATION : 0 ))
     
-    # 显示统计信息
-    if [[ $LOOP_COUNT -gt 3 ]]; then
-        # 正常显示模式（清除调试信息后）
-        printf "\r${SUCCESS}下载：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$RX_SPEED" "$RX_BAR" "$RX_TOTAL_DISPLAY"
-        printf "\r${INFO}上传：${WHITE}%-12s${RESET} ${PRIMARY}%s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$TX_SPEED" "$TX_BAR" "$TX_TOTAL_DISPLAY"
-        printf "\r${WARNING}运行时长：${WHITE}%02d:%02d:%02d${RESET} ${PRIMARY}|${RESET} ${INFO}平均：下载 ${WHITE}%-12s${RESET} 上传 ${WHITE}%-12s${RESET}" \
-            $HOURS $MINS $SECS "$(format_speed $AVG_RX 2>/dev/null || echo "0 B/s")" "$(format_speed $AVG_TX 2>/dev/null || echo "0 B/s")"
-        
-        # 移动光标到上一行开始位置，实现刷新效果
-        printf "\033[3A"
-    else
-        # 调试模式显示
-        printf "${SUCCESS}下载：${WHITE}%-12s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$RX_SPEED" "$RX_TOTAL_DISPLAY"
-        printf "${INFO}上传：${WHITE}%-12s${RESET} ${INFO}累计：${WHITE}%-12s${RESET}\n" "$TX_SPEED" "$TX_TOTAL_DISPLAY"
-    fi
+    # === 全屏刷新显示 ===
+    printf "\033[2J\033[H"
+    
+    echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo -e "  ${WHITE}${BOLD}              实时流量监控${RESET}  ${INFO}接口: ${WHITE}$INTERFACE${RESET}"
+    echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+    echo
+    
+    # 下载速度区
+    printf "  ${SUCCESS}${BOLD}↓ 下载${RESET}  ${WHITE}${BOLD}%-14s${RESET}" "$RX_SPEED"
+    printf "  ${INFO}累计: ${WHITE}%s${RESET}\n" "$RX_TOTAL_FMT"
+    echo -e "    ${PRIMARY}$RX_BAR${RESET}"
+    echo
+    
+    # 上传速度区
+    printf "  ${WARNING}${BOLD}↑ 上传${RESET}  ${WHITE}${BOLD}%-14s${RESET}" "$TX_SPEED"
+    printf "  ${INFO}累计: ${WHITE}%s${RESET}\n" "$TX_TOTAL_FMT"
+    echo -e "    ${INFO}$TX_BAR${RESET}"
+    echo
+    
+    # 分隔线
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    
+    # 统计信息区
+    printf "  ${INFO}平均下载: ${WHITE}%-14s${RESET}" "$(format_speed $AVG_RX 2>/dev/null || echo "0 B/s")"
+    printf "  ${INFO}平均上传: ${WHITE}%s${RESET}\n" "$(format_speed $AVG_TX 2>/dev/null || echo "0 B/s")"
+    printf "  ${INFO}峰值下载: ${WHITE}%-14s${RESET}" "$(format_speed $RX_PEAK 2>/dev/null || echo "0 B/s")"
+    printf "  ${INFO}峰值上传: ${WHITE}%s${RESET}\n" "$(format_speed $TX_PEAK 2>/dev/null || echo "0 B/s")"
+    echo
+    printf "  ${PRIMARY}运行时长: ${WHITE}${BOLD}%02d:%02d:%02d${RESET}\n" $HOURS $MINS $SECS
+    
+    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${GRAY}Ctrl+C 退出监控${RESET}"
 done
 
 echo -e "\n${INFO}监控循环结束${RESET}"
