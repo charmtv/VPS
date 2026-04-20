@@ -187,7 +187,7 @@ check_environment() {
     fi
     
     # 检查网络连接
-    if ! curl -s --max-time 10 --connect-timeout 5 https://www.google.com &>/dev/null; then
+    if ! curl -s --max-time 10 --connect-timeout 5 https://www.cloudflare.com &>/dev/null; then
         warning_msg "网络连接可能有问题，但继续安装..."
     fi
     
@@ -309,7 +309,7 @@ show_completion() {
     echo
     echo -e "${SUCCESS}🎉 米粒儿VPS流量消耗管理工具安装完成！${RESET}"
     echo
-    echo -e "${INFO}系统信息：${WHITE}$OS_NAME${RESET}"
+    echo -e "${INFO}系统信息：${WHITE}$PRETTY_NAME${RESET}"
     echo
     echo -e "${PRIMARY}使用方法：${RESET}"
     echo -e "  ${WHITE}• 快捷启动：${PRIMARY}$SHORTCUT_NAME${RESET}"

@@ -6,6 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
+VERSION="v3.0"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
 MONITOR_SCRIPT="/root/milier_monitor.sh"
@@ -660,18 +661,37 @@ EOF
 # 启动服务
 start_service() {
     clear
-    echo -e "${PRIMARY}配置流量消耗参数${RESET}"
-    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "${PRIMARY}  ⚡ 配置流量消耗参数${RESET}"
+    echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
     echo
     
     load_config
     
-    # URL配置
+    # URL选择菜单
+    echo -e "${INFO}  请选择下载URL：${RESET}"
+    echo
+    echo -e "    ${SUCCESS}[1]${RESET} ${WHITE}Cloudflare 100MB${RESET}  ${GRAY}(默认，推荐)${RESET}"
+    echo -e "    ${SUCCESS}[2]${RESET} ${WHITE}Cloudflare 1GB${RESET}    ${GRAY}(大文件模式)${RESET}"
+    echo -e "    ${SUCCESS}[3]${RESET} ${WHITE}Cloudflare 10GB${RESET}   ${GRAY}(超大文件模式)${RESET}"
     if [[ -n "$LAST_URL" ]]; then
-        echo -e "${INFO}上次使用：${WHITE}$LAST_URL${RESET}"
+        echo -e "    ${SUCCESS}[4]${RESET} ${WHITE}上次使用${RESET}          ${GRAY}$LAST_URL${RESET}"
     fi
-    read -p "请输入下载URL（回车使用默认）：" url
-    url=${url:-${LAST_URL:-"https://speed.cloudflare.com/__down?bytes=104857600"}}
+    echo -e "    ${SUCCESS}[5]${RESET} ${WHITE}自定义URL${RESET}"
+    echo
+    read -p "  请选择 [1]: " url_choice
+    url_choice=${url_choice:-1}
+    
+    case $url_choice in
+        1) url="https://speed.cloudflare.com/__down?bytes=104857600" ;;
+        2) url="https://speed.cloudflare.com/__down?bytes=1073741824" ;;
+        3) url="https://speed.cloudflare.com/__down?bytes=10737418240" ;;
+        4) url="${LAST_URL:-https://speed.cloudflare.com/__down?bytes=104857600}" ;;
+        5) 
+            read -p "  请输入自定义URL：" url
+            url=${url:-"https://speed.cloudflare.com/__down?bytes=104857600"}
+            ;;
+        *) url="https://speed.cloudflare.com/__down?bytes=104857600" ;;
+    esac
     
     # 线程数配置
     local cpu_cores=$(nproc)
@@ -700,7 +720,13 @@ start_service() {
     read -p "确认启动？(Y/n)：" confirm
     [[ "$confirm" =~ ^[Nn]$ ]] && return
     
-    export MILIER_URL="$url" MILIER_THREADS="$threads"
+    # 更新systemd服务文件中的URL和线程数
+    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]]; then
+        sed -i "s|Environment=\"MILIER_URL=.*\"|Environment=\"MILIER_URL=$url\"|" /etc/systemd/system/$SERVICE_NAME.service
+        sed -i "s|Environment=\"MILIER_THREADS=.*\"|Environment=\"MILIER_THREADS=$threads\"|" /etc/systemd/system/$SERVICE_NAME.service
+        systemctl daemon-reload
+    fi
+    
     systemctl stop $SERVICE_NAME 2>/dev/null
     systemctl start $SERVICE_NAME
     
@@ -1056,7 +1082,7 @@ advanced_monitor() {
     read -p "请输入刷新间隔 [1]：" refresh_interval
     refresh_interval=${refresh_interval:-1}
     
-    if ! [[ "$refresh_interval" =~ ^[1-9]$ ]] || [[ $refresh_interval -gt 10 ]]; then
+    if ! [[ "$refresh_interval" =~ ^([1-9]|10)$ ]]; then
         refresh_interval=1
     fi
     
@@ -1332,8 +1358,13 @@ save_monitor_data() {
         echo "累计上传: $(format_bytes $tx_total)"
         echo "峰值下载速度: $(format_bytes_per_sec $rx_peak)"
         echo "峰值上传速度: $(format_bytes_per_sec $tx_peak)"
-        echo "平均下载速度: $(format_bytes_per_sec $((rx_total / duration)))"
-        echo "平均上传速度: $(format_bytes_per_sec $((tx_total / duration)))"
+        if [[ $duration -gt 0 ]]; then
+            echo "平均下载速度: $(format_bytes_per_sec $((rx_total / duration)))"
+            echo "平均上传速度: $(format_bytes_per_sec $((tx_total / duration)))"
+        else
+            echo "平均下载速度: 0 B/s"
+            echo "平均上传速度: 0 B/s"
+        fi
         echo "==============================="
         echo
     } >> "$data_file"
@@ -1351,7 +1382,7 @@ check_update() {
     echo -e "${INFO}正在检查更新...${RESET}"
     
     # 获取当前版本
-    local current_version="v2.0"
+    local current_version="$VERSION"
     local script_url="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
     local temp_file="/tmp/milier_latest_check.sh"
     
@@ -1378,7 +1409,8 @@ check_update() {
             
             if [[ "$confirm_update" =~ ^[Yy]$ ]]; then
                 echo -e "${INFO}正在备份当前脚本...${RESET}"
-                cp "$0" "${0}.backup.$(date +%Y%m%d_%H%M%S)"
+                local backup_file="${0}.backup.$(date +%Y%m%d_%H%M%S)"
+                cp "$0" "$backup_file"
                 
                 echo -e "${INFO}正在更新脚本...${RESET}"
                 if cp "$temp_file" "$0" && chmod +x "$0"; then
@@ -1390,8 +1422,8 @@ check_update() {
                         exec bash "$0"
                     fi
                 else
-                    echo -e "${DANGER}❌ 更新失败，已恢复备份${RESET}"
-                    cp "${0}.backup.$(date +%Y%m%d_%H%M%S | head -1)" "$0" 2>/dev/null
+                    echo -e "${DANGER}❌ 更新失败，正在恢复备份...${RESET}"
+                    cp "$backup_file" "$0" 2>/dev/null
                 fi
             else
                 echo -e "${INFO}已取消更新${RESET}"
@@ -1422,6 +1454,200 @@ format_file_size() {
     fi
 }
 
+# ──────────────────────────────── 流量目标管理 ──────────────────────────────
+
+# 设置流量消耗目标
+set_traffic_target() {
+    clear
+    echo -e "${PRIMARY}  🎯 流量消耗目标设置${RESET}"
+    echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
+    echo
+    
+    local target_file="/root/milier_target.conf"
+    
+    # 显示当前目标
+    if [[ -f "$target_file" ]]; then
+        source "$target_file"
+        if [[ -n "$TARGET_GB" ]] && [[ "$TARGET_GB" != "0" ]]; then
+            echo -e "  ${INFO}当前目标：${WHITE}${TARGET_GB} GB${RESET}"
+            echo -e "  ${INFO}设置时间：${WHITE}${TARGET_SET_TIME:-未知}${RESET}"
+            
+            # 获取当前接口流量
+            load_config
+            local interface="${LAST_INTERFACE}"
+            if [[ -n "$interface" ]] && [[ -d "/sys/class/net/$interface" ]]; then
+                local current_rx=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+                local target_bytes=$((TARGET_GB * 1073741824))
+                local start_bytes=${TARGET_START_RX:-$current_rx}
+                local consumed=$(( current_rx > start_bytes ? current_rx - start_bytes : 0 ))
+                local consumed_gb=$(echo "scale=2; $consumed/1073741824" | bc 2>/dev/null || echo "$((consumed/1073741824))")
+                local percent=$(( target_bytes > 0 ? consumed * 100 / target_bytes : 0 ))
+                [[ $percent -gt 100 ]] && percent=100
+                
+                echo -e "  ${INFO}已消耗：${WHITE}${consumed_gb} GB${RESET} / ${WHITE}${TARGET_GB} GB${RESET} (${WHITE}${percent}%${RESET})"
+                
+                # 绘制进度条
+                local bar_len=40
+                local fill=$((percent * bar_len / 100))
+                [[ $fill -gt $bar_len ]] && fill=$bar_len
+                printf "  ${PRIMARY}["
+                for ((i=0; i<fill; i++)); do printf "█"; done
+                for ((i=fill; i<bar_len; i++)); do printf "░"; done
+                printf "]${RESET}\n"
+            fi
+            echo
+        else
+            echo -e "  ${WARNING}暂未设置流量目标${RESET}"
+            echo
+        fi
+    else
+        echo -e "  ${WARNING}暂未设置流量目标${RESET}"
+        echo
+    fi
+    
+    echo -e "  ${WHITE}[1]${RESET} 设置新的流量目标"
+    echo -e "  ${WHITE}[2]${RESET} 清除流量目标"
+    echo -e "  ${WHITE}[3]${RESET} 启用自动停止 ${GRAY}(达到目标后自动停止服务)${RESET}"
+    echo -e "  ${WHITE}[0]${RESET} 返回主菜单"
+    echo
+    
+    read -p "  请选择 [0-3]：" target_choice
+    case $target_choice in
+        1)
+            echo
+            echo -e "  ${INFO}请输入流量目标（单位：GB）：${RESET}"
+            read -p "  目标流量(GB): " target_gb
+            
+            if ! [[ "$target_gb" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ $(echo "$target_gb == 0" | bc 2>/dev/null) == "1" ]]; then
+                echo -e "  ${DANGER}❌ 请输入有效的数值${RESET}"
+                read -p "  按回车继续..."
+                set_traffic_target
+                return
+            fi
+            
+            load_config
+            local interface="${LAST_INTERFACE}"
+            [[ -z "$interface" ]] && interface=$(detect_network_interface 2>/dev/null)
+            local start_rx=$(cat "/sys/class/net/${interface:-eth0}/statistics/rx_bytes" 2>/dev/null || echo 0)
+            
+            cat > "$target_file" << EOF
+# 流量目标配置
+TARGET_GB="$target_gb"
+TARGET_START_RX="$start_rx"
+TARGET_INTERFACE="${interface:-eth0}"
+TARGET_SET_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
+TARGET_AUTO_STOP="false"
+EOF
+            echo -e "  ${SUCCESS}✅ 流量目标已设置为 ${WHITE}${target_gb} GB${RESET}"
+            read -p "  按回车继续..."
+            set_traffic_target
+            ;;
+        2)
+            rm -f "$target_file"
+            echo -e "  ${SUCCESS}✅ 流量目标已清除${RESET}"
+            read -p "  按回车继续..."
+            set_traffic_target
+            ;;
+        3)
+            if [[ -f "$target_file" ]]; then
+                source "$target_file"
+                if [[ -n "$TARGET_GB" ]] && [[ "$TARGET_GB" != "0" ]]; then
+                    sed -i 's/TARGET_AUTO_STOP=.*/TARGET_AUTO_STOP="true"/' "$target_file"
+                    echo -e "  ${SUCCESS}✅ 自动停止已启用${RESET}"
+                    echo -e "  ${INFO}当流量达到 ${WHITE}${TARGET_GB} GB${RESET} ${INFO}时，服务将自动停止${RESET}"
+                    
+                    # 创建后台检查脚本
+                    cat > /root/milier_target_check.sh << 'TARGETEOF'
+#!/bin/bash
+# 流量目标自动停止检查脚本
+source /root/milier_target.conf 2>/dev/null || exit 0
+[[ "$TARGET_AUTO_STOP" != "true" ]] && exit 0
+[[ -z "$TARGET_GB" ]] && exit 0
+
+INTERFACE="${TARGET_INTERFACE:-eth0}"
+CURRENT_RX=$(cat "/sys/class/net/$INTERFACE/statistics/rx_bytes" 2>/dev/null || echo 0)
+START_RX="${TARGET_START_RX:-0}"
+CONSUMED=$((CURRENT_RX - START_RX))
+TARGET_BYTES=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null || echo 0)
+
+if [[ $CONSUMED -ge ${TARGET_BYTES%.*} ]] 2>/dev/null; then
+    systemctl stop milier_flow 2>/dev/null
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): 流量目标 ${TARGET_GB}GB 已达成，服务已自动停止" >> /root/milier_flow.log
+fi
+TARGETEOF
+                    chmod +x /root/milier_target_check.sh
+                    
+                    # 添加到crontab (每5分钟检查一次)
+                    (crontab -l 2>/dev/null | grep -v milier_target_check; echo "*/5 * * * * /bin/bash /root/milier_target_check.sh") | crontab -
+                    echo -e "  ${INFO}已添加定时检查任务 (每5分钟检查一次)${RESET}"
+                else
+                    echo -e "  ${WARNING}请先设置流量目标${RESET}"
+                fi
+            else
+                echo -e "  ${WARNING}请先设置流量目标${RESET}"
+            fi
+            read -p "  按回车继续..."
+            set_traffic_target
+            ;;
+        0) return ;;
+        *) 
+            echo -e "  ${DANGER}无效选项${RESET}"
+            sleep 1
+            set_traffic_target
+            ;;
+    esac
+}
+
+# 网络速度测试
+speed_test() {
+    clear
+    echo -e "${PRIMARY}  🌐 网络速度测试${RESET}"
+    echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
+    echo
+    
+    echo -e "  ${INFO}正在测试下载速度...${RESET}"
+    echo -e "  ${GRAY}测试文件：Cloudflare 100MB${RESET}"
+    echo
+    
+    local start_time=$(date +%s%N)
+    local bytes_downloaded=0
+    
+    # 下载测试 (10MB快速测试)
+    local test_url="https://speed.cloudflare.com/__down?bytes=10485760"
+    bytes_downloaded=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 --connect-timeout 5 "$test_url" 2>/dev/null)
+    local end_time=$(date +%s%N)
+    
+    if [[ -n "$bytes_downloaded" ]] && [[ "$bytes_downloaded" -gt 0 ]] 2>/dev/null; then
+        local elapsed_ms=$(( (end_time - start_time) / 1000000 ))
+        [[ $elapsed_ms -eq 0 ]] && elapsed_ms=1
+        local speed_bps=$(( bytes_downloaded * 1000 / elapsed_ms ))
+        local speed_mbps=$(echo "scale=2; $speed_bps / 1048576" | bc 2>/dev/null || echo "$((speed_bps / 1048576))")
+        
+        echo -e "  ${SUCCESS}✅ 测试完成${RESET}"
+        echo
+        echo -e "  ${INFO}下载数据：${WHITE}$(format_bytes $bytes_downloaded 2>/dev/null || echo "${bytes_downloaded} B")${RESET}"
+        echo -e "  ${INFO}耗时：${WHITE}${elapsed_ms} ms${RESET}"
+        echo -e "  ${INFO}下载速度：${WHITE}${speed_mbps} MB/s${RESET}"
+        echo
+        
+        # 速度评级
+        if [[ $(echo "$speed_mbps > 100" | bc 2>/dev/null) == "1" ]]; then
+            echo -e "  ${SUCCESS}⭐ 网络速度极快！非常适合大量流量消耗${RESET}"
+        elif [[ $(echo "$speed_mbps > 50" | bc 2>/dev/null) == "1" ]]; then
+            echo -e "  ${SUCCESS}👍 网络速度良好${RESET}"
+        elif [[ $(echo "$speed_mbps > 10" | bc 2>/dev/null) == "1" ]]; then
+            echo -e "  ${WARNING}⚡ 网络速度一般${RESET}"
+        else
+            echo -e "  ${DANGER}⚠️ 网络速度较慢${RESET}"
+        fi
+    else
+        echo -e "  ${DANGER}❌ 速度测试失败，请检查网络连接${RESET}"
+    fi
+    
+    echo
+    read -p "  按回车返回菜单..."
+}
+
 # 卸载服务
 uninstall_service() {
     clear
@@ -1442,83 +1668,143 @@ uninstall_service() {
 }
 
 # ──────────────────────────────── 主菜单显示 ──────────────────────────────────
+
+# 获取服务状态标识
+get_status_badge() {
+    if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
+        echo -e "${SUCCESS}● 运行中${RESET}"
+    else
+        echo -e "${DANGER}○ 已停止${RESET}"
+    fi
+}
+
+# 获取流量目标摘要
+get_target_summary() {
+    local target_file="/root/milier_target.conf"
+    if [[ -f "$target_file" ]]; then
+        source "$target_file"
+        if [[ -n "$TARGET_GB" ]] && [[ "$TARGET_GB" != "0" ]]; then
+            echo -e "${INFO}🎯 目标：${WHITE}${TARGET_GB}GB${RESET}"
+            return
+        fi
+    fi
+    echo -e "${GRAY}🎯 未设置${RESET}"
+}
+
 show_menu() {
     clear
-    # 主标题 - 简洁居中
+    
+    # ╔══ 标题区 ══╗
     echo
-    echo -e "${PRIMARY}                            米粒儿VPS流量消耗管理工具${RESET}"
-    echo -e "${SECONDARY}                                    v2.0${RESET}"
-    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "${PRIMARY}${BOLD}    ╔══════════════════════════════════════════════════════════════════╗${RESET}"
+    echo -e "${PRIMARY}${BOLD}    ║${RESET}          ${WHITE}${BOLD}🚀  米粒儿VPS流量消耗管理工具${RESET}  ${SECONDARY}${VERSION}${RESET}            ${PRIMARY}${BOLD}║${RESET}"
+    echo -e "${PRIMARY}${BOLD}    ║${RESET}             ${LINK}官方TG群：https://t.me/mlkjfx6${RESET}              ${PRIMARY}${BOLD}║${RESET}"
+    echo -e "${PRIMARY}${BOLD}    ╚══════════════════════════════════════════════════════════════════╝${RESET}"
     echo
 
-    # 服务状态和系统信息
-    get_service_info
-    echo
+    # ┌── 状态区 ──┐
+    local status_badge=$(get_status_badge)
+    local target_summary=$(get_target_summary)
     
-    # 系统信息
-    echo -e "${ACCENT}系统信息${RESET}"
-    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
-    get_system_info
+    echo -e "    ${GRAY}┌─${RESET} ${WHITE}${BOLD}💻 系统概况${RESET} ${GRAY}───────────────────────────────────────────────────┐${RESET}"
     
+    # 服务状态行
+    local pid_info=""
+    if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
+        local pid=$(systemctl show -p MainPID --value $SERVICE_NAME 2>/dev/null)
+        pid_info="  ${INFO}PID：${WHITE}${pid:-N/A}${RESET}"
+    fi
+    echo -e "    ${GRAY}│${RESET}  ${INFO}服务：${RESET}${status_badge}${pid_info}    ${target_summary}"
+    
+    # 系统信息 - 紧凑布局
+    local hostname=$(hostname 2>/dev/null || echo "未知")
+    local cpu_cores=$(nproc 2>/dev/null || echo "?")
+    local mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.1f", $3/1024}' || echo "?")
+    local mem_total=$(awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "?")
+    local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}' || echo "未知")
+    local load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "未知")
+    local interfaces_count=$(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-" | wc -l || echo 0)
+    
+    printf "    ${GRAY}│${RESET}  ${INFO}主机：${WHITE}%-14s${RESET} ${INFO}CPU：${WHITE}%-6s${RESET} ${INFO}内存：${WHITE}%s/%sGB${RESET}\n" \
+        "$hostname" "${cpu_cores}核" "$mem_used" "$mem_total"
+    printf "    ${GRAY}│${RESET}  ${INFO}磁盘：${WHITE}%-14s${RESET} ${INFO}接口：${WHITE}%-6s${RESET} ${INFO}负载：${WHITE}%s${RESET}\n" \
+        "$disk_usage" "$interfaces_count" "$load_avg"
+
     # 使用统计
     load_config
     if [[ -n "$USAGE_COUNT" ]] && [[ $USAGE_COUNT -gt 0 ]]; then
-        printf "${INFO}使用次数：${WHITE}%-8s${RESET}    ${INFO}最后使用：${WHITE}%-20s${RESET}\n" "$USAGE_COUNT" "${LAST_USED:-未知}"
+        printf "    ${GRAY}│${RESET}  ${INFO}使用：${WHITE}%-14s${RESET} ${INFO}最后：${WHITE}%s${RESET}\n" "${USAGE_COUNT}次" "${LAST_USED:-未知}"
     fi
+    echo -e "    ${GRAY}└──────────────────────────────────────────────────────────────────┘${RESET}"
     echo
 
-    # 官方联系方式 - 简洁排列，统一颜色
-    echo -e "${ACCENT}官方联系方式${RESET}"
-    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
-    printf "${INFO}%-12s${LINK}%-35s${RESET} ${INFO}%-12s${LINK}%-20s${RESET}\n" \
-        "📱 TG群：" "https://t.me/mlkjfx6" \
-        "🌐 博客：" "https://ooovps.com"
-    printf "${INFO}%-12s${LINK}%-35s${RESET}\n" \
-        "🏛️  论坛：" "https://nodeloc.com"
+    # ⚡ 服务控制
+    echo -e "    ${GRAY}──${RESET} ${SUCCESS}${BOLD}⚡ 服务控制${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
+    echo
+    echo -e "       ${SUCCESS}[1]${RESET}  ▸ 启动流量消耗服务"
+    echo -e "       ${DANGER}[2]${RESET}  ▸ 停止流量消耗服务"
+    echo -e "       ${WARNING}[3]${RESET}  ▸ 重启流量消耗服务"
+    echo -e "       ${ACCENT}[4]${RESET}  ▸ 流量消耗目标设置          ${GRAY}NEW${RESET}"
     echo
 
-    # 操作菜单 - 竖排布局
-    echo -e "${PRIMARY}操作菜单${RESET}"
-    echo -e "${GRAY}├─────────────────────────────────────────────────────────────────────────────┤${RESET}"
-    echo -e "${SUCCESS}1) 启动流量消耗服务${RESET}"
-    echo -e "${DANGER}2) 停止流量消耗服务${RESET}"
-    echo -e "${INFO}3) 实时流量监控${RESET}"
-    echo -e "${WARNING}4) 重启流量服务${RESET}"
-    echo -e "${INFO}5) 查看服务日志${RESET}"
-    echo -e "${SECONDARY}6) 快捷键管理${RESET}"
-    echo -e "${ACCENT}8) 测试监控功能${RESET}"
-    echo -e "${SECONDARY}9) 高级监控${RESET}"
-    echo -e "${WARNING}A) 检查更新${RESET}"
-    echo -e "${DANGER}7) 卸载全部服务${RESET}"
-    echo -e "${GRAY}0) 退出程序${RESET}"
-    echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
+    # 📊 监控工具
+    echo -e "    ${GRAY}──${RESET} ${PRIMARY}${BOLD}📊 监控工具${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
+    echo
+    echo -e "       ${PRIMARY}[5]${RESET}  ▸ 实时流量监控"
+    echo -e "       ${SECONDARY}[6]${RESET}  ▸ 高级流量监控"
+    echo -e "       ${INFO}[7]${RESET}  ▸ 监控功能诊断"
+    echo -e "       ${LINK}[8]${RESET}  ▸ 网络速度测试              ${GRAY}NEW${RESET}"
+    echo
+
+    # 🔧 系统管理
+    echo -e "    ${GRAY}──${RESET} ${WARNING}${BOLD}🔧 系统管理${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
+    echo
+    echo -e "       ${INFO}[9]${RESET}  ▸ 查看服务日志"
+    echo -e "       ${SECONDARY}[A]${RESET}  ▸ 快捷键管理"
+    echo -e "       ${WARNING}[B]${RESET}  ▸ 检查脚本更新"
+    echo -e "       ${DANGER}[U]${RESET}  ▸ 卸载全部服务"
+    echo
+
+    # 📱 联系方式
+    echo -e "    ${GRAY}──${RESET} ${ACCENT}${BOLD}📱 联系我们${RESET} ${GRAY}──────────────────────────────────────────────────${RESET}"
+    printf "    ${GRAY}  ${RESET} ${LINK}TG群：t.me/mlkjfx6${RESET}  ${GRAY}│${RESET}  ${LINK}博客：ooovps.com${RESET}  ${GRAY}│${RESET}  ${LINK}论坛：nodeloc.com${RESET}\n"
+    echo
+
+    echo -e "    ${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
+    echo -e "       ${GRAY}[0]${RESET}  退出程序"
+    echo -e "    ${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
     echo
     
-    read -p "请选择操作 [0-9,A]：" choice
+    read -p "    请选择操作 ▶ " choice
     
     case $choice in
         1) start_service ;;
         2) stop_service ;;
-        3) show_monitor ;;
-        4) restart_service ;;
-        5) show_logs ;;
-        6) shortcut_management ;;
-        7) uninstall_service ;;
-        8) test_monitor ;;
-        9) advanced_monitor ;;
-        [Aa]) check_update ;;
+        3) restart_service ;;
+        4) set_traffic_target ;;
+        5) show_monitor ;;
+        6) advanced_monitor ;;
+        7) test_monitor ;;
+        8) speed_test ;;
+        9) show_logs ;;
+        [Aa]) shortcut_management ;;
+        [Bb]) check_update ;;
+        [Uu]) uninstall_service ;;
         0) 
             clear
             echo
-            echo -e "${SUCCESS}                        感谢使用米粒儿工具${RESET}"
-            echo -e "${LINK}                   欢迎加入官方TG群：@mlkjfx6${RESET}"
-            echo
-            echo -e "${WHITE}                              再见！${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ╔══════════════════════════════════════════════════════════════════╗${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ║${RESET}                                                                  ${PRIMARY}${BOLD}║${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ║${RESET}          ${SUCCESS}${BOLD}感谢使用米粒儿VPS流量消耗管理工具！${RESET}              ${PRIMARY}${BOLD}║${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ║${RESET}                                                                  ${PRIMARY}${BOLD}║${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ║${RESET}       ${LINK}欢迎加入官方TG群：https://t.me/mlkjfx6${RESET}            ${PRIMARY}${BOLD}║${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ║${RESET}                                                                  ${PRIMARY}${BOLD}║${RESET}"
+            echo -e "${PRIMARY}${BOLD}    ╚══════════════════════════════════════════════════════════════════╝${RESET}"
             echo
             exit 0
             ;;
         *) 
-            echo -e "${DANGER}❌ 无效选项，请输入 0-9 或 A${RESET}"
+            echo -e "    ${DANGER}❌ 无效选项${RESET}"
             sleep 1
             ;;
     esac
