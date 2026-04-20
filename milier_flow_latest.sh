@@ -1777,7 +1777,7 @@ show_menu() {
     # 联系方式
     echo -e "  ${ACCENT}${BOLD}[联系我们]${RESET}"
     echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${LINK}TG群: t.me/mlkjfx6  ${GRAY}|${RESET}  ${LINK}博客: ooovps.com  ${GRAY}|${RESET}  ${LINK}论坛: nodeloc.com${RESET}"
+    echo -e "  ${LINK}TG群: t.me/mlkjfx6  ${GRAY}|${RESET}  ${LINK}博客: ooovps.com${RESET}"
     echo
     echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
     echo -e "   ${GRAY}[0]${RESET} 退出程序"

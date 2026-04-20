@@ -199,7 +199,6 @@ bash /root/milier_uninstall.sh
 
 - 🔗 **官方TG群**：[https://t.me/mlkjfx6](https://t.me/mlkjfx6)
 - 🌐 **官方博客**：[https://ooovps.com](https://ooovps.com)
-- 🏛️ **技术论坛**：[https://nodeloc.com](https://nodeloc.com)
 - 💻 **GitHub项目**：[https://github.com/charmtv/VPS](https://github.com/charmtv/VPS)
 
 ## 📜 开源协议
