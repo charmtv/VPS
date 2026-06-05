@@ -3,7 +3,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 米粒儿VPS流量消耗管理工具 - 一键安装脚本
 # 官方TG群：https://t.me/mlvps66
-# GitHub：https://github.com/charmtv/VPS
+# 博客：https://vpssss.com/
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # 颜色配置
@@ -16,7 +16,7 @@ WHITE="\e[97m"
 RESET="\e[0m"
 
 # 配置常量
-REPO_URL="https://github.com/charmtv/VPS"
+REPO_URL="https://vpssss.com/"
 SCRIPT_URL="https://xh.813099.xyz/milier_flow_latest.sh"
 INSTALL_DIR="/root"
 SCRIPT_NAME="milier_flow.sh"
@@ -325,7 +325,7 @@ show_completion() {
     echo
     echo -e "${PRIMARY}官方支持：${RESET}"
     echo -e "  ${WHITE}• TG群：${INFO}https://t.me/mlvps66${RESET}"
-    echo -e "  ${WHITE}• GitHub：${INFO}$REPO_URL${RESET}"
+    echo -e "  ${WHITE}• 博客：${INFO}https://vpssss.com/${RESET}"
     echo
     echo -e "${WARNING}现在就可以输入 '${PRIMARY}$SHORTCUT_NAME${WARNING}' 开始使用！${RESET}"
     echo -e "${INFO}如果遇到问题，脚本会自动安装必要依赖并提供详细错误提示${RESET}"
@@ -337,7 +337,6 @@ main() {
     show_header
     
     echo -e "${INFO}正在安装米粒儿VPS流量消耗管理工具（增强版）...${RESET}"
-    echo -e "${INFO}GitHub项目：${WHITE}$REPO_URL${RESET}"
     echo -e "${INFO}本版本特别优化了Debian 13系统兼容性${RESET}"
     echo
     
