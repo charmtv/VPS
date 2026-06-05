@@ -1752,12 +1752,68 @@ uninstall_service() {
     echo -e "${DANGER}危险操作警告${RESET}"
     echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
-    echo -e "${WARNING}此操作将删除所有服务、文件和配置（不可恢复）${RESET}"
+    echo -e "${WARNING}此操作将彻底删除所有服务、文件、配置和缓存（不可恢复）${RESET}"
     echo
-    read -p "确认卸载请输入 'YES'：" confirm
+    echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
+    echo
+    read -p "确认卸载请输入 'ok'：" confirm
     
-    if [[ "$confirm" == "YES" ]]; then
-        [[ -f "$UNINSTALL_SCRIPT" ]] && bash "$UNINSTALL_SCRIPT"
+    if [[ "$confirm" == "ok" ]]; then
+        echo -e "${WARNING}正在彻底卸载...${RESET}"
+        
+        # 1. 停止并禁用服务
+        systemctl stop $SERVICE_NAME 2>/dev/null
+        systemctl disable $SERVICE_NAME 2>/dev/null
+        
+        # 2. 杀死所有残留进程
+        pkill -f milier_thread 2>/dev/null
+        pkill -f milier_check 2>/dev/null
+        pkill -f "curl -A MilierFlow" 2>/dev/null
+        
+        # 3. 删除 systemd 服务文件
+        rm -f /etc/systemd/system/$SERVICE_NAME.service
+        systemctl daemon-reload
+        
+        # 4. 删除主脚本和辅助脚本
+        rm -f "/root/$SCRIPT_NAME"
+        rm -f "$MONITOR_SCRIPT"
+        rm -f "$UNINSTALL_SCRIPT"
+        rm -f "/root/milier_start.sh"
+        
+        # 5. 删除所有配置文件
+        rm -f "$CONFIG_FILE"
+        rm -f "$SHORTCUT_CONFIG"
+        rm -f "/root/milier_target.conf"
+        
+        # 6. 删除日志文件
+        rm -f "$LOG_FILE"
+        rm -f /root/milier_flow*.log
+        
+        # 7. 清理临时文件和缓存
+        rm -f /tmp/milier_*
+        rm -f /tmp/milier_latest_check.sh
+        
+        # 8. 清理 crontab 中的相关条目
+        crontab -l 2>/dev/null | grep -v "milier" | crontab - 2>/dev/null
+        
+        # 9. 删除快捷键
+        if [[ -f "$SHORTCUT_CONFIG" ]]; then
+            source "$SHORTCUT_CONFIG"
+            [[ -n "$SHORTCUT_PATH" ]] && rm -f "$SHORTCUT_PATH"
+        fi
+        # 删除默认快捷键
+        rm -f "/usr/local/bin/xh"
+        rm -f "/usr/local/bin/$DEFAULT_SHORTCUT"
+        
+        # 10. 删除自身脚本
+        local self_path="$(readlink -f "$0")"
+        
+        echo
+        echo -e "${SUCCESS}✅ 卸载完成，已彻底清理所有文件、配置和缓存${RESET}"
+        echo
+        
+        # 最后删除自身
+        rm -f "$self_path" 2>/dev/null
         exit 0
     else
         echo -e "${WARNING}操作已取消${RESET}"
