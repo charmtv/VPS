@@ -7,13 +7,13 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # 颜色配置
-PRIMARY=""
-SUCCESS=""
-WARNING=""
-DANGER=""
-INFO=""
-WHITE=""
-RESET=""
+PRIMARY="\e[38;5;39m"
+SUCCESS="\e[38;5;46m"
+WARNING="\e[38;5;226m"
+DANGER="\e[38;5;196m"
+INFO="\e[38;5;117m"
+WHITE="\e[97m"
+RESET="\e[0m"
 
 # 配置常量
 REPO_URL="https://vpssss.com/"
