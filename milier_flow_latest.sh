@@ -16,14 +16,14 @@ SHORTCUT_CONFIG="/root/milier_shortcut.conf"
 DEFAULT_SHORTCUT="xh"
 
 # ──────────────────────────────── 统一颜色方案 ────────────────────────────────
-PRIMARY="\e[38;5;39m"         # 主蓝色
-SECONDARY="\e[38;5;51m"       # 次蓝色
-SUCCESS="\e[38;5;46m"         # 亮绿色
-WARNING="\e[38;5;226m"        # 亮黄色
-DANGER="\e[38;5;196m"         # 亮红色
-INFO="\e[38;5;117m"           # 浅蓝色
-ACCENT="\e[38;5;213m"         # 紫红色
-LINK="\e[38;5;87m"            # 青色 - 统一链接颜色
+PRIMARY="\e[36m"         # 主蓝色
+SECONDARY="\e[36m"       # 次蓝色
+SUCCESS="\e[32m"         # 亮绿色
+WARNING="\e[33m"        # 亮黄色
+DANGER="\e[31m"         # 亮红色
+INFO="\e[36m"           # 浅蓝色
+ACCENT="\e[35m"         # 紫红色
+LINK="\e[34m"            # 青色 - 统一链接颜色
 WHITE="\e[97m"                # 纯白色
 GRAY="\e[90m"                 # 灰色
 BOLD="\e[1m"                  # 加粗
@@ -409,22 +409,22 @@ EOF
 INTERFACE=$1
 
 # 显示启动信息
-echo -e "\e[38;5;117m正在启动监控脚本...\e[0m"
-echo -e "\e[38;5;117m传入参数：$*\e[0m"
+echo -e "\e[36m正在启动监控脚本...\e[0m"
+echo -e "\e[36m传入参数：$*\e[0m"
 
 # 参数验证
 if [[ -z "$INTERFACE" ]]; then
-    echo -e "\e[38;5;196m❌ 错误：未指定网络接口\e[0m"
-    echo -e "\e[38;5;117m用法：$0 <网络接口名>\e[0m"
+    echo -e "\e[31m❌ 错误：未指定网络接口\e[0m"
+    echo -e "\e[36m用法：$0 <网络接口名>\e[0m"
     read -p "按回车继续..."
     exit 1
 fi
 
-echo -e "\e[38;5;117m检查网络接口：$INTERFACE\e[0m"
+echo -e "\e[36m检查网络接口：$INTERFACE\e[0m"
 
 if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
-    echo -e "\e[38;5;196m❌ 错误：网络接口 '$INTERFACE' 不存在\e[0m"
-    echo -e "\e[38;5;117m可用接口：\e[0m"
+    echo -e "\e[31m❌ 错误：网络接口 '$INTERFACE' 不存在\e[0m"
+    echo -e "\e[36m可用接口：\e[0m"
     ls -la /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -10
     read -p "按回车继续..."
     exit 1
@@ -432,22 +432,22 @@ fi
 
 # 检查接口状态文件权限
 if [[ ! -r "/sys/class/net/$INTERFACE/statistics/rx_bytes" ]] || [[ ! -r "/sys/class/net/$INTERFACE/statistics/tx_bytes" ]]; then
-    echo -e "\e[38;5;196m❌ 错误：无法读取网络接口统计信息\e[0m"
-    echo -e "\e[38;5;117m接口路径：/sys/class/net/$INTERFACE/statistics/\e[0m"
-    echo -e "\e[38;5;117m权限检查：\e[0m"
+    echo -e "\e[31m❌ 错误：无法读取网络接口统计信息\e[0m"
+    echo -e "\e[36m接口路径：/sys/class/net/$INTERFACE/statistics/\e[0m"
+    echo -e "\e[36m权限检查：\e[0m"
     ls -la "/sys/class/net/$INTERFACE/statistics/" 2>/dev/null | head -5
-    echo -e "\e[38;5;117m当前用户：$(whoami)\e[0m"
-    echo -e "\e[38;5;117m请确保以root权限运行\e[0m"
+    echo -e "\e[36m当前用户：$(whoami)\e[0m"
+    echo -e "\e[36m请确保以root权限运行\e[0m"
     read -p "按回车继续..."
     exit 1
 fi
 
-echo -e "\e[38;5;46m✅ 接口检查通过\e[0m"
+echo -e "\e[32m✅ 接口检查通过\e[0m"
 
 # 统一颜色方案
-PRIMARY="\e[38;5;39m"; SUCCESS="\e[38;5;46m"; WARNING="\e[38;5;226m"
-INFO="\e[38;5;117m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
-DANGER="\e[38;5;196m"; ACCENT="\e[38;5;213m"
+PRIMARY="\e[36m"; SUCCESS="\e[32m"; WARNING="\e[33m"
+INFO="\e[36m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
+DANGER="\e[31m"; ACCENT="\e[35m"
 BAR_LEN=50
 
 # 检查必要命令
@@ -713,7 +713,7 @@ EOF
     # 创建卸载脚本
     cat > "$UNINSTALL_SCRIPT" << EOF
 #!/bin/bash
-SUCCESS="\e[38;5;46m"; WARNING="\e[38;5;226m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
+SUCCESS="\e[32m"; WARNING="\e[33m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
 
 echo -e "\${WARNING}正在卸载米粒儿服务...\${RESET}"
 systemctl stop $SERVICE_NAME 2>/dev/null
@@ -1229,8 +1229,8 @@ advanced_monitor_loop() {
     local HISTORY_SIZE=60  # 保留60个数据点
     
     # 颜色和符号
-    local SUCCESS="\e[38;5;46m" WARNING="\e[38;5;226m" DANGER="\e[38;5;196m"
-    local INFO="\e[38;5;117m" WHITE="\e[97m" RESET="\e[0m" PRIMARY="\e[38;5;39m"
+    local SUCCESS="\e[32m" WARNING="\e[33m" DANGER="\e[31m"
+    local INFO="\e[36m" WHITE="\e[97m" RESET="\e[0m" PRIMARY="\e[36m"
     
     clear
     echo -e "${PRIMARY}                          高级实时流量监控${RESET}"
