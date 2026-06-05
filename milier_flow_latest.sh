@@ -369,7 +369,7 @@ fi
 
 # 2. 启动下载并发线程
 for ((i=1;i<=THREADS;i++)); do
-  bash -c "while true; do curl -A 'MilierFlow' -s -m 30 --connect-timeout 10 -o /dev/null \$URL; sleep 0.1; done" milier_thread &
+  bash -c "while true; do curl -A 'MilierFlow' -s -m 30 --connect-timeout 10 -o /dev/null $URL; sleep 0.1; done" milier_thread &
 done
 
 wait
