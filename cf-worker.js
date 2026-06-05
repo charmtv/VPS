@@ -28,8 +28,8 @@ export default {
           'Accept': 'text/plain',
         },
         cf: {
-          // 缓存 5 分钟，减少 GitHub 请求
-          cacheTtl: 300,
+          // 缓存 60 秒，更新后快速生效
+          cacheTtl: 60,
           cacheEverything: true,
         },
       });
@@ -44,7 +44,7 @@ export default {
         status: 200,
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
+          'Cache-Control': 'public, max-age=60',
           'X-Powered-By': 'MilierVPS-CDN',
           'Access-Control-Allow-Origin': '*',
         },
