@@ -17,7 +17,7 @@ RESET="\e[0m"
 
 # 配置常量
 REPO_URL="https://github.com/charmtv/VPS"
-SCRIPT_URL="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
+SCRIPT_URL="https://xh.813099.xyz/milier_flow_latest.sh"
 INSTALL_DIR="/root"
 SCRIPT_NAME="milier_flow.sh"
 SHORTCUT_NAME="xh"

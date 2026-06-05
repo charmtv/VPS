@@ -1481,7 +1481,7 @@ check_update() {
     
     # 获取当前版本
     local current_version="$SCRIPT_VERSION"
-    local script_url="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
+    local script_url="https://xh.813099.xyz/milier_flow_latest.sh"
     local temp_file="/tmp/milier_latest_check.sh"
     
     # 下载最新版本检查

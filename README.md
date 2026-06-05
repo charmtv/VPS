@@ -11,20 +11,20 @@
 
 ### 方法1：使用curl（推荐）
 ```bash
-curl -fsSL https://raw.githubusercontent.com/charmtv/VPS/main/install.sh | sudo bash
+curl -fsSL https://xh.813099.xyz | bash
 ```
 
 ### 方法2：使用wget
 ```bash
-wget -qO- https://raw.githubusercontent.com/charmtv/VPS/main/install.sh | sudo bash
+wget -qO- https://xh.813099.xyz | bash
 ```
 
 ### 方法3：手动安装
 ```bash
 # 下载安装脚本
-wget https://raw.githubusercontent.com/charmtv/VPS/main/install.sh
+wget -O install.sh https://xh.813099.xyz
 chmod +x install.sh
-sudo bash install.sh
+bash install.sh
 ```
 
 ## 🎯 快速开始
