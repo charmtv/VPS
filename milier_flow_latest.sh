@@ -19,18 +19,23 @@ PRESET_CONFIG_FILE="/root/milier_presets.conf"
 DEFAULT_SHORTCUT="xh"
 
 # ──────────────────────────────── 统一颜色方案 ────────────────────────────────
-PRIMARY="\e[36m"         # 主蓝色
-SECONDARY="\e[36m"       # 次蓝色
-SUCCESS="\e[32m"         # 亮绿色
-WARNING="\e[33m"        # 亮黄色
-DANGER="\e[31m"         # 亮红色
-INFO="\e[36m"           # 浅蓝色
-ACCENT="\e[35m"         # 紫红色
-LINK="\e[34m"            # 青色 - 统一链接颜色
-WHITE="\e[97m"                # 纯白色
-GRAY="\e[90m"                 # 灰色
-BOLD="\e[1m"                  # 加粗
-RESET="\e[0m"                 # 重置
+PRIMARY="\e[38;5;81m"     # 品牌青，仅用于标题和主强调
+SECONDARY="\e[38;5;110m"  # 低饱和蓝灰，用于辅助信息
+SUCCESS="\e[38;5;114m"    # 状态绿，仅用于运行/成功
+WARNING="\e[38;5;179m"    # 琥珀色，仅用于提醒
+DANGER="\e[38;5;203m"     # 柔和红，仅用于停止/危险
+INFO="\e[38;5;117m"       # 信息蓝
+ACCENT="\e[38;5;180m"     # 暖金色，用于少量高亮
+LINK="\e[38;5;75m"        # 链接蓝
+WHITE="\e[38;5;255m"      # 主文字
+GRAY="\e[38;5;244m"       # 次级文字
+MUTED="\e[38;5;240m"      # 结构线与弱文字
+PANEL="\e[38;5;238m"      # 面板边框
+LABEL="\e[38;5;109m"      # 字段标签
+VALUE="\e[38;5;253m"      # 字段值
+KEY="\e[38;5;81m"         # 操作键
+BOLD="\e[1m"              # 加粗
+RESET="\e[0m"             # 重置
 
 # ──────────────────────────────── 工具函数 ────────────────────────────────────
 
@@ -2115,28 +2120,29 @@ get_target_summary() {
     if load_target_config; then
         if [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
             local auto_stop=""
-            [[ "$TARGET_AUTO_STOP" == "true" ]] && auto_stop=" ${GRAY}/ 自动停${RESET}"
-            echo -e "${INFO}目标：${WHITE}${TARGET_GB}GB${RESET}${auto_stop}"
+            [[ "$TARGET_AUTO_STOP" == "true" ]] && auto_stop=" ${MUTED}/ 自动停${RESET}"
+            echo -e "${LABEL}目标${RESET} ${VALUE}${TARGET_GB}GB${RESET}${auto_stop}"
             return
         fi
     fi
-    echo -e "${GRAY}目标：未设置${RESET}"
+    echo -e "${LABEL}目标${RESET} ${GRAY}未设置${RESET}"
 }
 
 show_menu() {
     clear
 
     echo
-    echo -e "  ${PRIMARY}${BOLD}米粒儿VPS流量消耗管理工具${RESET}  ${GRAY}${SCRIPT_VERSION}${RESET}"
-    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${PANEL}╭────────────────────────────────────────────────────────────╮${RESET}"
+    echo -e "  ${PANEL}│${RESET} ${PRIMARY}${BOLD}米粒儿 VPS 流量控制台${RESET} ${MUTED}${SCRIPT_VERSION}${RESET}                          ${PANEL}│${RESET}"
+    echo -e "  ${PANEL}╰────────────────────────────────────────────────────────────╯${RESET}"
     echo
 
     local status_badge=$(get_status_badge)
     local target_summary=$(get_target_summary)
-    local pid_info=""
+    local pid_value="--"
     if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
         local pid=$(systemctl show -p MainPID --value $SERVICE_NAME 2>/dev/null)
-        pid_info=" ${GRAY}/ PID ${WHITE}${pid:-N/A}${RESET}"
+        pid_value="${pid:-N/A}"
     fi
 
     local hostname=$(hostname 2>/dev/null || echo "未知")
@@ -2148,42 +2154,44 @@ show_menu() {
     local interfaces_count=$(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-" | wc -l || echo 0)
 
     load_config || true
-    local last_line="${GRAY}暂无历史启动配置${RESET}"
+    local last_line="${MUTED}暂无历史启动配置${RESET}"
     if [[ -n "$LAST_URL" ]]; then
         local short_url="$LAST_URL"
-        [[ ${#short_url} -gt 54 ]] && short_url="${short_url:0:51}..."
-        last_line="${INFO}上次：${WHITE}${LAST_THREADS:-?}线程${RESET} ${GRAY}/ ${LAST_INTERFACE:-未知} / ${short_url}${RESET}"
+        [[ ${#short_url} -gt 48 ]] && short_url="${short_url:0:45}..."
+        last_line="${LABEL}上次${RESET} ${VALUE}${LAST_THREADS:-?}线程${RESET} ${MUTED}/ ${LAST_INTERFACE:-未知} / ${short_url}${RESET}"
     fi
 
-    echo -e "  ${WHITE}${BOLD}状态${RESET}"
-    echo -e "  ${INFO}服务：${RESET}${status_badge}${pid_info}    ${target_summary}"
-    echo -e "  ${INFO}主机：${WHITE}${hostname}${RESET}  ${INFO}CPU：${WHITE}${cpu_cores}核${RESET}  ${INFO}内存：${WHITE}${mem_used}/${mem_total}GB${RESET}"
-    echo -e "  ${INFO}磁盘：${WHITE}${disk_usage}${RESET}  ${INFO}接口：${WHITE}${interfaces_count}${RESET}  ${INFO}负载：${WHITE}${load_avg}${RESET}"
+    echo -e "  ${MUTED}STATUS${RESET}"
+    echo -e "  ${LABEL}服务${RESET} ${status_badge}   ${LABEL}PID${RESET} ${VALUE}${pid_value}${RESET}   ${target_summary}"
+    echo -e "  ${LABEL}主机${RESET} ${VALUE}${hostname}${RESET}   ${LABEL}CPU${RESET} ${VALUE}${cpu_cores}核${RESET}   ${LABEL}内存${RESET} ${VALUE}${mem_used}/${mem_total}GB${RESET}"
+    echo -e "  ${LABEL}磁盘${RESET} ${VALUE}${disk_usage}${RESET}   ${LABEL}接口${RESET} ${VALUE}${interfaces_count}${RESET}   ${LABEL}负载${RESET} ${VALUE}${load_avg}${RESET}"
     echo -e "  $last_line"
     if [[ "$USAGE_COUNT" =~ ^[0-9]+$ ]] && [[ $USAGE_COUNT -gt 0 ]]; then
-        echo -e "  ${INFO}使用：${WHITE}${USAGE_COUNT}次${RESET}  ${INFO}最后：${WHITE}${LAST_USED:-未知}${RESET}"
+        echo -e "  ${LABEL}使用${RESET} ${VALUE}${USAGE_COUNT}次${RESET} ${MUTED}/ 最后 ${LAST_USED:-未知}${RESET}"
     fi
     echo
 
-    echo -e "  ${SUCCESS}${BOLD}核心操作${RESET}"
-    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
-    echo -e "   ${SUCCESS}[1]${RESET} 启动/重配      ${DANGER}[2]${RESET} 停止服务      ${WARNING}[3]${RESET} 重启服务      ${ACCENT}[4]${RESET} 流量目标"
+    echo -e "  ${MUTED}ACTIONS${RESET}"
+    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
+    echo -e "    ${KEY}1${RESET} ${WHITE}启动/重配${RESET}       ${KEY}2${RESET} ${WHITE}停止服务${RESET}       ${KEY}3${RESET} ${WHITE}重启服务${RESET}       ${KEY}4${RESET} ${WHITE}流量目标${RESET}"
     echo
 
-    echo -e "  ${PRIMARY}${BOLD}监控诊断${RESET}"
-    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
-    echo -e "   ${PRIMARY}[5]${RESET} 实时监控      ${SECONDARY}[6]${RESET} 高级监控      ${INFO}[7]${RESET} 功能诊断      ${LINK}[8]${RESET} 网络测速"
+    echo -e "  ${MUTED}OBSERVE${RESET}"
+    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
+    echo -e "    ${KEY}5${RESET} ${WHITE}实时监控${RESET}       ${KEY}6${RESET} ${WHITE}高级监控${RESET}       ${KEY}7${RESET} ${WHITE}功能诊断${RESET}       ${KEY}8${RESET} ${WHITE}网络测速${RESET}"
     echo
 
-    echo -e "  ${WARNING}${BOLD}维护${RESET}"
-    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
-    echo -e "   ${INFO}[9]${RESET} 服务日志      ${SECONDARY}[A]${RESET} 快捷键      ${WARNING}[B]${RESET} 检查更新      ${DANGER}[U]${RESET} 卸载      ${GRAY}[0]${RESET} 退出"
+    echo -e "  ${MUTED}MAINTAIN${RESET}"
+    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
+    echo -e "    ${KEY}9${RESET} ${WHITE}服务日志${RESET}       ${KEY}A${RESET} ${WHITE}快捷键${RESET}         ${KEY}B${RESET} ${WHITE}检查更新${RESET}       ${DANGER}U${RESET} ${WHITE}卸载${RESET}       ${GRAY}0${RESET} ${WHITE}退出${RESET}"
     echo
-    echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${LINK}TG: t.me/mlvps66${RESET}  ${GRAY}|${RESET}  ${LINK}Blog: vpssss.com${RESET}"
+    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${MUTED}TG${RESET} ${LINK}t.me/mlvps66${RESET}   ${MUTED}BLOG${RESET} ${LINK}vpssss.com${RESET}"
     echo
 
-    read -p "  请选择操作 (1-9/A/B/U/0) > " choice
+    local prompt_text
+    printf -v prompt_text "  ${LABEL}选择操作${RESET} ${MUTED}(1-9/A/B/U/0)${RESET} ${PRIMARY}>${RESET} "
+    read -p "$prompt_text" choice
 
     case $choice in
         1) start_service ;;
