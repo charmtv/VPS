@@ -2,7 +2,7 @@
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 米粒儿VPS流量消耗管理工具 - 官方版本
-# 官方TG群：https://t.me/mlvps66
+# 官方TG群：https://t.me/mlvps25221
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
@@ -2186,7 +2186,7 @@ show_menu() {
     echo -e "    ${KEY}9${RESET} ${WHITE}服务日志${RESET}       ${KEY}A${RESET} ${WHITE}快捷键${RESET}         ${KEY}B${RESET} ${WHITE}检查更新${RESET}       ${DANGER}U${RESET} ${WHITE}卸载${RESET}       ${GRAY}0${RESET} ${WHITE}退出${RESET}"
     echo
     echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${MUTED}TG${RESET} ${LINK}t.me/mlvps66${RESET}   ${MUTED}BLOG${RESET} ${LINK}vpssss.com${RESET}"
+    echo -e "  ${MUTED}TG${RESET} ${LINK}t.me/mlvps25221${RESET}"
     echo
 
     local prompt_text
@@ -2213,7 +2213,7 @@ show_menu() {
             echo
             echo -e "  ${SUCCESS}${BOLD}      感谢使用米粒儿VPS流量消耗管理工具!${RESET}"
             echo
-            echo -e "  ${LINK}      欢迎加入官方TG群: https://t.me/mlvps66${RESET}"
+            echo -e "  ${LINK}      欢迎加入官方TG群: https://t.me/mlvps25221${RESET}"
             echo
             echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
             echo

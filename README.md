@@ -74,7 +74,7 @@ xh
   ────────────────────────────────────────────────────────────
     9 服务日志       A 快捷键         B 检查更新       U 卸载       0 退出
 
-  TG t.me/mlvps66   BLOG vpssss.com
+  TG t.me/mlvps25221
 ```
 
 ## 监控界面预览
@@ -202,8 +202,7 @@ bash /root/milier_uninstall.sh
 
 ## 📞 支持与反馈
 
-- 🔗 **官方TG群**：[https://t.me/mlvps66](https://t.me/mlvps66)
-- 🌐 **官方博客**：[https://vpssss.com/](https://vpssss.com/)
+- 🔗 **官方TG群**：[https://t.me/mlvps25221](https://t.me/mlvps25221)
 - 💻 **GitHub项目**：[https://github.com/charmtv/VPS](https://github.com/charmtv/VPS)
 
 ## 📜 开源协议
