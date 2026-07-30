@@ -2,7 +2,7 @@
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 米粒儿VPS流量消耗管理工具 - 一键安装脚本
-# 官方TG群：https://t.me/mlvps25221
+# 米粒VPS交流群：https://t.me/mlkjfx66
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # 颜色配置
@@ -185,13 +185,16 @@ check_environment() {
 download_script() {
     info_msg "正在下载米粒儿主脚本..."
 
-    local temp_file download_url
+    local temp_file download_url request_url separator
     temp_file=$(mktemp) || error_exit "创建临时文件失败"
     mkdir -p "$INSTALL_DIR"
 
     # 主地址异常时自动切换到 GitHub，下载完成后先做语法检查再替换。
     for download_url in "$SCRIPT_URL" "$SCRIPT_FALLBACK_URL"; do
-        if curl -fsSL --retry 3 --connect-timeout 10 --max-time 90 "$download_url" -o "$temp_file" \
+        separator="?"
+        [[ "$download_url" == *"?"* ]] && separator="&"
+        request_url="${download_url}${separator}t=$(date +%s)"
+        if curl -fsSL -H "Cache-Control: no-cache" --retry 3 --connect-timeout 10 --max-time 90 "$request_url" -o "$temp_file" \
             && bash -n "$temp_file" 2>/dev/null \
             && install -m 755 "$temp_file" "$INSTALL_DIR/$SCRIPT_NAME"; then
             rm -f "$temp_file"

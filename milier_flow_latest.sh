@@ -2,11 +2,11 @@
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 米粒儿VPS流量消耗管理工具 - 官方版本
-# 官方TG群：https://t.me/mlvps25221
+# 米粒VPS交流群：https://t.me/mlkjfx66
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-SCRIPT_VERSION="v3.1"
+SCRIPT_VERSION="v3.2"
 SCRIPT_NAME="milier_flow.sh"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
@@ -17,22 +17,31 @@ SHORTCUT_CONFIG="/root/milier_shortcut.conf"
 TARGET_CONFIG_FILE="/root/milier_target.conf"
 PRESET_CONFIG_FILE="/root/milier_presets.conf"
 DEFAULT_SHORTCUT="xh"
+TG_GROUP_NAME="米粒VPS交流群"
+TG_GROUP_URL="https://t.me/mlkjfx66"
 
-# ──────────────────────────────── 统一颜色方案 ────────────────────────────────
-PRIMARY="\e[38;5;81m"     # 品牌青，仅用于标题和主强调
-SUCCESS="\e[38;5;114m"    # 状态绿，仅用于运行/成功
-WARNING="\e[38;5;179m"    # 琥珀色，仅用于提醒
-DANGER="\e[38;5;203m"     # 柔和红，仅用于停止/危险
-INFO="\e[38;5;117m"       # 信息蓝
-WHITE="\e[38;5;255m"      # 主文字
-GRAY="\e[38;5;244m"       # 次级文字
-MUTED="\e[38;5;240m"      # 结构线与弱文字
-PANEL="\e[38;5;238m"      # 面板边框
-LABEL="\e[38;5;109m"      # 字段标签
-VALUE="\e[38;5;253m"      # 字段值
-KEY="\e[38;5;81m"         # 操作键
+# ──────────────────────────────── 专业低饱和配色 ──────────────────────────────
+# 主界面只使用青色、白色和灰色；绿色、黄色、红色仅表达状态。
+PRIMARY="\e[1;36m"        # 品牌青：标题、分组、操作键
+SUCCESS="\e[32m"          # 状态绿：运行、成功
+WARNING="\e[33m"          # 状态黄：提醒
+DANGER="\e[31m"           # 状态红：停止、错误、危险操作
+INFO="\e[36m"             # 信息青
+WHITE="\e[37m"            # 主文字
+GRAY="\e[90m"             # 次级文字
+MUTED="\e[90m"            # 弱文字
+PANEL="\e[90m"            # 分隔线
+LABEL="\e[90m"            # 字段标签
+VALUE="\e[37m"            # 字段值
+KEY="\e[1;36m"            # 操作键
 BOLD="\e[1m"              # 加粗
 RESET="\e[0m"             # 重置
+
+# 非交互输出、NO_COLOR 或简易终端下关闭颜色控制码。
+if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
+    PRIMARY="" SUCCESS="" WARNING="" DANGER="" INFO=""
+    WHITE="" GRAY="" MUTED="" PANEL="" LABEL="" VALUE="" KEY="" BOLD="" RESET=""
+fi
 
 # ──────────────────────────────── 工具函数 ────────────────────────────────────
 
@@ -1691,7 +1700,7 @@ check_update() {
 
     # 获取当前版本
     local current_version="$SCRIPT_VERSION"
-    local current_script temp_file script_url download_ok=false
+    local current_script temp_file script_url request_url separator download_ok=false
     current_script=$(readlink -f "$0")
     temp_file=$(mktemp /tmp/milier_latest_check.XXXXXX.sh) || {
         echo -e "${DANGER}❌ 创建临时文件失败${RESET}"
@@ -1703,7 +1712,10 @@ check_update() {
     for script_url in \
         "https://xh.813099.xyz/milier_flow_latest.sh" \
         "https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"; do
-        if curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 "$script_url" -o "$temp_file" \
+        separator="?"
+        [[ "$script_url" == *"?"* ]] && separator="&"
+        request_url="${script_url}${separator}t=$(date +%s)"
+        if curl -fsSL -H "Cache-Control: no-cache" --retry 2 --connect-timeout 8 --max-time 30 "$request_url" -o "$temp_file" \
             && bash -n "$temp_file" 2>/dev/null; then
             download_ok=true
             break
@@ -1821,6 +1833,11 @@ set_traffic_target() {
         if [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
             echo -e "  ${INFO}当前目标：${WHITE}${TARGET_GB} GB${RESET}"
             echo -e "  ${INFO}设置时间：${WHITE}${TARGET_SET_TIME:-未知}${RESET}"
+            if [[ "${TARGET_AUTO_STOP:-false}" == "true" ]]; then
+                echo -e "  ${INFO}自动停止：${SUCCESS}已开启${RESET}"
+            else
+                echo -e "  ${INFO}自动停止：${GRAY}已关闭${RESET}"
+            fi
 
             # 获取当前接口流量
             local interface="${TARGET_INTERFACE:-}"
@@ -1836,7 +1853,14 @@ set_traffic_target() {
                 [[ "$current_rx" =~ ^[0-9]+$ ]] || current_rx=0
                 [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
                 [[ "$start_bytes" =~ ^[0-9]+$ ]] || start_bytes=$current_rx
-                local consumed=$(( current_rx > start_bytes ? current_rx - start_bytes : 0 ))
+                local previous=${TARGET_PREV_CONSUMED:-0}
+                [[ "$previous" =~ ^[0-9]+$ ]] || previous=0
+                local consumed
+                if [[ $current_rx -ge $start_bytes ]]; then
+                    consumed=$((current_rx - start_bytes + previous))
+                else
+                    consumed=$((current_rx + previous))
+                fi
                 local consumed_gb
                 consumed_gb=$(echo "scale=2; $consumed/1073741824" | bc 2>/dev/null || echo "$((consumed/1073741824))")
                 local percent=$(( target_bytes > 0 ? consumed * 100 / target_bytes : 0 ))
@@ -1863,9 +1887,11 @@ set_traffic_target() {
         echo
     fi
 
-    echo -e "  ${WHITE}[1]${RESET} 设置新的流量目标"
-    echo -e "  ${WHITE}[2]${RESET} 清除流量目标"
-    echo -e "  ${WHITE}[3]${RESET} 启用自动停止 ${GRAY}(达到目标后自动停止服务)${RESET}"
+    local auto_stop_action="启用自动停止"
+    [[ "${TARGET_AUTO_STOP:-false}" == "true" ]] && auto_stop_action="关闭自动停止"
+    echo -e "  ${KEY}[1]${RESET} ${WHITE}设置新的流量目标${RESET}"
+    echo -e "  ${KEY}[2]${RESET} ${WHITE}清除流量目标${RESET}"
+    echo -e "  ${KEY}[3]${RESET} ${WHITE}${auto_stop_action}${RESET} ${GRAY}(达到目标后停止服务)${RESET}"
     echo -e "  ${WHITE}[0]${RESET} 返回主菜单"
     echo
 
@@ -1899,6 +1925,8 @@ set_traffic_target() {
             ;;
         2)
             rm -f "$target_file"
+            crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
+            rm -f /root/milier_target_check.sh
             echo -e "  ${SUCCESS}✅ 流量目标已清除${RESET}"
             read -r -p "  按回车继续..."
             set_traffic_target
@@ -1906,6 +1934,21 @@ set_traffic_target() {
         3)
             if [[ -f "$target_file" ]]; then
                 if load_target_config && [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
+                    if [[ "${TARGET_AUTO_STOP:-false}" == "true" ]]; then
+                        save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "false" "${TARGET_PREV_CONSUMED:-0}" || {
+                            echo -e "  ${DANGER}❌ 自动停止配置保存失败${RESET}"
+                            read -r -p "  按回车继续..."
+                            set_traffic_target
+                            return
+                        }
+                        crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
+                        rm -f /root/milier_target_check.sh
+                        echo -e "  ${SUCCESS}✅ 自动停止已关闭${RESET}"
+                        read -r -p "  按回车继续..."
+                        set_traffic_target
+                        return
+                    fi
+
                     save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "true" "${TARGET_PREV_CONSUMED:-0}" || {
                         echo -e "  ${DANGER}❌ 自动停止配置保存失败${RESET}"
                         read -r -p "  按回车继续..."
@@ -1944,10 +1987,15 @@ safe_source_target_config || exit 0
 INTERFACE="${TARGET_INTERFACE:-eth0}"
 CURRENT_RX=$(cat "/sys/class/net/$INTERFACE/statistics/rx_bytes" 2>/dev/null || echo 0)
 START_RX="${TARGET_START_RX:-0}"
+PREV_CONSUMED="${TARGET_PREV_CONSUMED:-0}"
 [[ "$CURRENT_RX" =~ ^[0-9]+$ ]] || CURRENT_RX=0
 [[ "$START_RX" =~ ^[0-9]+$ ]] || START_RX=0
-CONSUMED=$((CURRENT_RX - START_RX))
-[[ $CONSUMED -lt 0 ]] && CONSUMED=0
+[[ "$PREV_CONSUMED" =~ ^[0-9]+$ ]] || PREV_CONSUMED=0
+if [[ $CURRENT_RX -ge $START_RX ]]; then
+    CONSUMED=$((CURRENT_RX - START_RX + PREV_CONSUMED))
+else
+    CONSUMED=$((CURRENT_RX + PREV_CONSUMED))
+fi
 TARGET_BYTES=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null || echo 0)
 TARGET_BYTES="${TARGET_BYTES%.*}"
 [[ "$TARGET_BYTES" =~ ^[0-9]+$ && "$TARGET_BYTES" -gt 0 ]] || exit 0
@@ -2130,6 +2178,29 @@ get_target_summary() {
         if [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
             local auto_stop=""
             [[ "$TARGET_AUTO_STOP" == "true" ]] && auto_stop=" ${MUTED}· 自动停止${RESET}"
+
+            local interface="${TARGET_INTERFACE:-}" current_rx start_rx previous consumed target_bytes percent consumed_gb
+            if validate_interface_name "$interface" && [[ -r "/sys/class/net/$interface/statistics/rx_bytes" ]]; then
+                current_rx=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+                start_rx="${TARGET_START_RX:-0}"
+                previous="${TARGET_PREV_CONSUMED:-0}"
+                [[ "$current_rx" =~ ^[0-9]+$ ]] || current_rx=0
+                [[ "$start_rx" =~ ^[0-9]+$ ]] || start_rx=0
+                [[ "$previous" =~ ^[0-9]+$ ]] || previous=0
+
+                if [[ $current_rx -ge $start_rx ]]; then
+                    consumed=$((current_rx - start_rx + previous))
+                else
+                    consumed=$((current_rx + previous))
+                fi
+                target_bytes=$(awk -v gb="$TARGET_GB" 'BEGIN {printf "%.0f", gb * 1073741824}')
+                percent=$((target_bytes > 0 ? consumed * 100 / target_bytes : 0))
+                [[ $percent -gt 100 ]] && percent=100
+                consumed_gb=$(awk -v bytes="$consumed" 'BEGIN {printf "%.2f", bytes / 1073741824}')
+                echo -e "${VALUE}${consumed_gb} / ${TARGET_GB} GB${RESET} ${MUTED}· ${percent}%${RESET}${auto_stop}"
+                return
+            fi
+
             echo -e "${VALUE}${TARGET_GB} GB${RESET}${auto_stop}"
             return
         fi
@@ -2148,12 +2219,17 @@ print_menu_item() {
     printf "  %b[%s]%b %b%s%b\n" "$KEY" "$key" "$RESET" "$WHITE" "$label" "$RESET"
 }
 
+print_menu_section() {
+    local title="$1"
+    printf "  %b%s%b\n" "${WHITE}${BOLD}" "$title" "$RESET"
+}
+
 show_menu() {
     clear
 
     echo
     echo -e "  ${PRIMARY}${BOLD}米粒儿 VPS 流量控制台${RESET}  ${MUTED}${SCRIPT_VERSION}${RESET}"
-    echo -e "  ${PANEL}────────────────────────────────────────────${RESET}"
+    echo -e "  ${PANEL}──────────────────────────────────────────────${RESET}"
     echo
 
     local status_badge target_summary
@@ -2181,10 +2257,10 @@ show_menu() {
     if [[ -n "$LAST_URL" ]]; then
         local short_url="$LAST_URL"
         [[ ${#short_url} -gt 42 ]] && short_url="${short_url:0:39}..."
-        last_config="${VALUE}${LAST_THREADS:-?} 线程${RESET} ${MUTED}· ${LAST_INTERFACE:-未知} · ${short_url}${RESET}"
+        last_config="${VALUE}${LAST_THREADS:-?} 线程 · ${LAST_INTERFACE:-未知} · ${short_url}${RESET}"
     fi
 
-    echo -e "  ${MUTED}系统状态${RESET}"
+    print_menu_section "系统概览"
     print_status_row "服务状态" "${status_badge} ${MUTED}· PID ${pid_value}${RESET}"
     print_status_row "流量目标" "$target_summary"
     print_status_row "主机信息" "${VALUE}${host_name}${RESET}"
@@ -2196,27 +2272,30 @@ show_menu() {
     fi
     echo
 
-    echo -e "  ${MUTED}服务管理${RESET}"
+    print_menu_section "服务管理"
     print_menu_item "1" "启动或重新配置"
     print_menu_item "2" "停止服务"
     print_menu_item "3" "重启服务"
     print_menu_item "4" "流量目标"
     echo
 
-    echo -e "  ${MUTED}监控工具${RESET}"
+    print_menu_section "监控工具"
     print_menu_item "5" "实时流量监控"
     print_menu_item "6" "高级流量监控"
     print_menu_item "7" "功能诊断"
     print_menu_item "8" "网络测速"
     echo
 
-    echo -e "  ${MUTED}系统维护${RESET}"
+    print_menu_section "系统维护"
     print_menu_item "9" "查看服务日志"
     print_menu_item "A" "快捷键管理"
     print_menu_item "B" "检查脚本更新"
     printf "  %b[U]%b %b卸载全部服务%b\n" "$DANGER" "$RESET" "$WHITE" "$RESET"
     echo
     printf "  %b[0]%b %b退出控制台%b\n" "$GRAY" "$RESET" "$WHITE" "$RESET"
+    echo
+    echo -e "  ${PANEL}──────────────────────────────────────────────${RESET}"
+    printf "  %b%s%b  %b%s%b\n" "$MUTED" "$TG_GROUP_NAME" "$RESET" "$PRIMARY" "$TG_GROUP_URL" "$RESET"
     echo
 
     local prompt_text

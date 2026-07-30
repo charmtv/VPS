@@ -1,9 +1,9 @@
-# 🚀 米粒儿VPS流量消耗管理工具 v3.1
+# 🚀 米粒儿VPS流量消耗管理工具 v3.2
 
 [![GitHub](https://img.shields.io/badge/GitHub-charmtv/VPS-blue?logo=github)](https://github.com/charmtv/VPS)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-3.1-brightgreen)](https://github.com/charmtv/VPS)
+[![Version](https://img.shields.io/badge/Version-3.2-brightgreen)](https://github.com/charmtv/VPS)
 
 专业的VPS流量消耗管理工具，支持多线程并发下载、实时流量监控、流量目标管理、网络测速、系统服务集成等功能。
 
@@ -54,12 +54,12 @@ xh
 ## 功能菜单
 
 ```bash
-  米粒儿 VPS 流量控制台  v3.1
+  米粒儿 VPS 流量控制台  v3.2
   ────────────────────────────────────────────
 
-  系统状态
+  系统概览
   服务状态  ● 运行中 · PID 1234
-  流量目标  100 GB · 自动停止
+  流量目标  25.00 / 100 GB · 25% · 自动停止
   主机信息  vps-host
   资源占用  CPU 2 核 · 内存 0.4/1.0 GB
   存储网络  3.1G/20G (16%) · 1 个接口 · 负载 0.00, 0.01, 0.00
@@ -84,6 +84,8 @@ xh
   [U] 卸载全部服务
 
   [0] 退出控制台
+  ──────────────────────────────────────────────
+  米粒VPS交流群  https://t.me/mlkjfx66
 ```
 
 ## 监控界面预览
@@ -193,6 +195,14 @@ bash /root/milier_uninstall.sh
 2. 检查网络接口：`ip link show`
 3. 检查权限：确保有读取网络统计的权限
 
+## 📌 v3.2 更新日志
+
+- 🎨 **专业低饱和配色** - 主界面以青、白、灰为主，状态色仅用于运行、提醒和错误
+- 📊 **目标进度摘要** - 主菜单直接显示已消耗流量、目标值和完成百分比
+- 🔁 **自动停止开关** - 流量目标菜单支持随时开启或关闭自动停止
+- 🖥️ **终端兼容优化** - 支持 `NO_COLOR`，在简易终端及非交互输出中自动关闭颜色
+- 💬 **交流群入口** - 主菜单加入米粒VPS交流群链接
+
 ## 📌 v3.1 更新日志
 
 - 🎨 **主菜单竖排化** - 所有操作单项单行显示，减少横向拥挤
@@ -219,7 +229,7 @@ bash /root/milier_uninstall.sh
 
 ## 📞 支持与反馈
 
-- 🔗 **官方TG群**：[https://t.me/mlvps25221](https://t.me/mlvps25221)
+- 🔗 **米粒VPS交流群**：[https://t.me/mlkjfx66](https://t.me/mlkjfx66)
 - 💻 **GitHub项目**：[https://github.com/charmtv/VPS](https://github.com/charmtv/VPS)
 
 ## 📜 开源协议
