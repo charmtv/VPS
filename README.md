@@ -1,9 +1,9 @@
-# 🚀 米粒儿VPS流量消耗管理工具 v3.2
+# 🚀 米粒儿VPS流量消耗管理工具 v3.2.1
 
 [![GitHub](https://img.shields.io/badge/GitHub-charmtv/VPS-blue?logo=github)](https://github.com/charmtv/VPS)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-3.2-brightgreen)](https://github.com/charmtv/VPS)
+[![Version](https://img.shields.io/badge/Version-3.2.1-brightgreen)](https://github.com/charmtv/VPS)
 
 专业的VPS流量消耗管理工具，支持多线程并发下载、实时流量监控、流量目标管理、网络测速、系统服务集成等功能。
 
@@ -54,7 +54,7 @@ xh
 ## 功能菜单
 
 ```bash
-  米粒儿 VPS 流量控制台  v3.2
+  米粒儿 VPS 流量控制台  v3.2.1
   ────────────────────────────────────────────
 
   系统概览
@@ -194,6 +194,11 @@ bash /root/milier_uninstall.sh
 1. 运行 `[7] 监控功能诊断` 自动检测问题
 2. 检查网络接口：`ip link show`
 3. 检查权限：确保有读取网络统计的权限
+
+## 📌 v3.2.1 更新日志
+
+- 🔆 **高对比度显示** - 移除深灰色文字，标签、提示、分隔线统一提高亮度
+- 🎨 **终端兼容配色** - 改用标准高亮 ANSI 颜色，适配深色终端和网页终端
 
 ## 📌 v3.2 更新日志
 
