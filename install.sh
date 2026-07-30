@@ -6,29 +6,18 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # 颜色配置
-PRIMARY="\e[36m"
 SUCCESS="\e[32m"
 WARNING="\e[33m"
 DANGER="\e[31m"
 INFO="\e[36m"
-WHITE="\e[97m"
 RESET="\e[0m"
 
 # 配置常量
 SCRIPT_URL="https://xh.813099.xyz/milier_flow_latest.sh"
+SCRIPT_FALLBACK_URL="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
 INSTALL_DIR="/root"
 SCRIPT_NAME="milier_flow.sh"
 SHORTCUT_NAME="xh"
-
-# 显示标题
-show_header() {
-    clear
-    echo
-    echo -e "${PRIMARY}                    米粒儿VPS流量消耗管理工具${RESET}"
-    echo -e "${INFO}                          一键安装脚本${RESET}"
-    echo -e "${PRIMARY}$(printf '%*s' 70 | tr ' ' '=')"
-    echo
-}
 
 # 错误退出函数
 error_exit() {
@@ -57,7 +46,6 @@ detect_system() {
         source /etc/os-release
         OS_ID="${ID}"
         OS_VERSION="${VERSION_ID}"
-        OS_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-unknown}}"
         info_msg "检测到系统：$PRETTY_NAME"
     else
         error_exit "不支持的操作系统，仅支持Linux系统"
@@ -196,20 +184,24 @@ check_environment() {
 # 下载主脚本
 download_script() {
     info_msg "正在下载米粒儿主脚本..."
-    
-    # 创建安装目录
+
+    local temp_file download_url
+    temp_file=$(mktemp) || error_exit "创建临时文件失败"
     mkdir -p "$INSTALL_DIR"
-    
-    # 下载脚本文件
-    if curl -fsSL "$SCRIPT_URL" -o "$INSTALL_DIR/$SCRIPT_NAME"; then
-        success_msg "脚本下载成功"
-    else
-        error_exit "脚本下载失败，请检查网络连接"
-    fi
-    
-    # 设置执行权限
-    chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
-    success_msg "脚本权限设置完成"
+
+    # 主地址异常时自动切换到 GitHub，下载完成后先做语法检查再替换。
+    for download_url in "$SCRIPT_URL" "$SCRIPT_FALLBACK_URL"; do
+        if curl -fsSL --retry 3 --connect-timeout 10 --max-time 90 "$download_url" -o "$temp_file" \
+            && bash -n "$temp_file" 2>/dev/null \
+            && install -m 755 "$temp_file" "$INSTALL_DIR/$SCRIPT_NAME"; then
+            rm -f "$temp_file"
+            success_msg "脚本下载成功"
+            return 0
+        fi
+    done
+
+    rm -f "$temp_file"
+    error_exit "脚本下载或语法校验失败，请检查网络连接"
 }
 
 # 创建快捷键
@@ -303,46 +295,21 @@ final_verification() {
     success_msg "最终验证通过"
 }
 
-# 显示安装完成信息
-show_completion() {
-    echo
-    echo -e "${SUCCESS}🎉 米粒儿VPS流量消耗管理工具安装完成！${RESET}"
-    echo
-    echo -e "${INFO}系统信息：${WHITE}$PRETTY_NAME${RESET}"
-    echo
-    echo -e "${PRIMARY}使用方法：${RESET}"
-    echo -e "  ${WHITE}• 快捷启动：${PRIMARY}$SHORTCUT_NAME${RESET}"
-    echo -e "  ${WHITE}• 完整路径：${INFO}bash $INSTALL_DIR/$SCRIPT_NAME${RESET}"
-    echo
-    echo -e "${PRIMARY}功能特点：${RESET}"
-    echo -e "  ${WHITE}• 智能多线程流量消耗${RESET}"
-    echo -e "  ${WHITE}• 实时流量监控与统计（已增强兼容性）${RESET}"
-    echo -e "  ${WHITE}• 自动网络接口选择${RESET}"
-    echo -e "  ${WHITE}• 系统服务后台运行${RESET}"
-    echo -e "  ${WHITE}• 全系统兼容（特别优化Debian 13）${RESET}"
-    echo
-    echo -e "${PRIMARY}官方支持：${RESET}"
-    echo -e "  ${WHITE}• TG群：${INFO}https://t.me/mlvps25221${RESET}"
-    echo
-    echo -e "${WARNING}现在就可以输入 '${PRIMARY}$SHORTCUT_NAME${WARNING}' 开始使用！${RESET}"
-    echo -e "${INFO}如果遇到问题，脚本会自动安装必要依赖并提供详细错误提示${RESET}"
-    echo
-}
-
 # 主安装流程
 main() {
-    show_header
-    
-    echo -e "${INFO}正在安装米粒儿VPS流量消耗管理工具（增强版）...${RESET}"
-    echo -e "${INFO}本版本特别优化了Debian 13系统兼容性${RESET}"
-    echo
-    
+    echo -e "${INFO}正在准备米粒儿 VPS 流量控制台...${RESET}"
     check_environment
     download_script
     create_global_shortcut
     verify_installation
     final_verification
-    show_completion
+
+    # curl | bash 的标准输入通常已到文件尾，切换到终端后直接进入主菜单。
+    clear
+    if [[ ! -t 0 ]] && (: </dev/tty) 2>/dev/null; then
+        exec bash "$INSTALL_DIR/$SCRIPT_NAME" </dev/tty
+    fi
+    exec bash "$INSTALL_DIR/$SCRIPT_NAME"
 }
 
 # 执行安装

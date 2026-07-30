@@ -1,9 +1,9 @@
-# 🚀 米粒儿VPS流量消耗管理工具 v3.0
+# 🚀 米粒儿VPS流量消耗管理工具 v3.1
 
 [![GitHub](https://img.shields.io/badge/GitHub-charmtv/VPS-blue?logo=github)](https://github.com/charmtv/VPS)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-3.0-brightgreen)](https://github.com/charmtv/VPS)
+[![Version](https://img.shields.io/badge/Version-3.1-brightgreen)](https://github.com/charmtv/VPS)
 
 专业的VPS流量消耗管理工具，支持多线程并发下载、实时流量监控、流量目标管理、网络测速、系统服务集成等功能。
 
@@ -15,6 +15,8 @@
 ```bash
 curl -fsSL https://xh.813099.xyz | bash
 ```
+
+脚本会保留环境检测、依赖安装和系统更新流程；安装完成后直接进入控制台，无需再次输入启动命令。
 
 ### 方法2：使用wget
 ```bash
@@ -31,7 +33,7 @@ bash install.sh
 
 ## 🎯 快速开始
 
-安装完成后，直接输入快捷键启动：
+以后再次使用时，直接输入快捷键启动：
 ```bash
 xh
 ```
@@ -52,29 +54,36 @@ xh
 ## 功能菜单
 
 ```bash
-  ╭────────────────────────────────────────────────────────────╮
-  │ 米粒儿 VPS 流量控制台 v3.0                                │
-  ╰────────────────────────────────────────────────────────────╯
+  米粒儿 VPS 流量控制台  v3.1
+  ────────────────────────────────────────────
 
-  STATUS
-  服务 ● 运行中   PID 1234   目标 100GB / 自动停
-  主机 vps-host   CPU 2核   内存 0.4/1.0GB
-  磁盘 3.1G/20G (16%)   接口 1   负载 0.00, 0.01, 0.00
-  上次 4线程 / eth0 / http://hkg.download.datapacket.com/100mb...
+  系统状态
+  服务状态  ● 运行中 · PID 1234
+  流量目标  100 GB · 自动停止
+  主机信息  vps-host
+  资源占用  CPU 2 核 · 内存 0.4/1.0 GB
+  存储网络  3.1G/20G (16%) · 1 个接口 · 负载 0.00, 0.01, 0.00
+  上次配置  4 线程 · eth0 · https://speed.cloudflare.com/...
 
-  ACTIONS
-  ────────────────────────────────────────────────────────────
-    1 启动/重配       2 停止服务       3 重启服务       4 流量目标
+  服务管理
+  [1] 启动或重新配置
+  [2] 停止服务
+  [3] 重启服务
+  [4] 流量目标
 
-  OBSERVE
-  ────────────────────────────────────────────────────────────
-    5 实时监控       6 高级监控       7 功能诊断       8 网络测速
+  监控工具
+  [5] 实时流量监控
+  [6] 高级流量监控
+  [7] 功能诊断
+  [8] 网络测速
 
-  MAINTAIN
-  ────────────────────────────────────────────────────────────
-    9 服务日志       A 快捷键         B 检查更新       U 卸载       0 退出
+  系统维护
+  [9] 查看服务日志
+  [A] 快捷键管理
+  [B] 检查脚本更新
+  [U] 卸载全部服务
 
-  TG t.me/mlvps25221
+  [0] 退出控制台
 ```
 
 ## 监控界面预览
@@ -163,7 +172,7 @@ systemctl stop milier_flow
 ```bash
 bash /root/milier_uninstall.sh
 ```
-`/root/milier_uninstall.sh` 会在首次初始化工具后生成；刚安装但尚未进入工具菜单时，请先运行 `xh` 完成初始化。
+`/root/milier_uninstall.sh` 会在安装后首次进入控制台时自动生成。
 
 ## 🔍 故障排除
 
@@ -183,6 +192,14 @@ bash /root/milier_uninstall.sh
 1. 运行 `[7] 监控功能诊断` 自动检测问题
 2. 检查网络接口：`ip link show`
 3. 检查权限：确保有读取网络统计的权限
+
+## 📌 v3.1 更新日志
+
+- 🎨 **主菜单竖排化** - 所有操作单项单行显示，减少横向拥挤
+- ✨ **状态区精简** - 统一中文标签、颜色和信息层级，更便于快速查看
+- ⚡ **安装后直达控制台** - 一键安装完成后自动打开主菜单
+- 🛡️ **下载校验与备用源** - 主地址异常时切换 GitHub，替换前执行脚本语法检查
+- ⌨️ **输入处理优化** - 自动清理空白字符，并在终端输入结束时正常退出
 
 ## 📌 v3.0 更新日志
 

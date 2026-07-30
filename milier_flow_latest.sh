@@ -6,7 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-SCRIPT_VERSION="v3.0"
+SCRIPT_VERSION="v3.1"
 SCRIPT_NAME="milier_flow.sh"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
@@ -20,13 +20,10 @@ DEFAULT_SHORTCUT="xh"
 
 # ──────────────────────────────── 统一颜色方案 ────────────────────────────────
 PRIMARY="\e[38;5;81m"     # 品牌青，仅用于标题和主强调
-SECONDARY="\e[38;5;110m"  # 低饱和蓝灰，用于辅助信息
 SUCCESS="\e[38;5;114m"    # 状态绿，仅用于运行/成功
 WARNING="\e[38;5;179m"    # 琥珀色，仅用于提醒
 DANGER="\e[38;5;203m"     # 柔和红，仅用于停止/危险
 INFO="\e[38;5;117m"       # 信息蓝
-ACCENT="\e[38;5;180m"     # 暖金色，用于少量高亮
-LINK="\e[38;5;75m"        # 链接蓝
 WHITE="\e[38;5;255m"      # 主文字
 GRAY="\e[38;5;244m"       # 次级文字
 MUTED="\e[38;5;240m"      # 结构线与弱文字
@@ -42,7 +39,7 @@ RESET="\e[0m"             # 重置
 # 错误处理函数
 error_exit() {
     echo -e "${DANGER}❌ 错误：$1${RESET}" >&2
-    read -p "按回车返回菜单..."
+    read -r -p "按回车返回菜单..."
 }
 
 # 检查命令执行结果
@@ -97,6 +94,7 @@ safe_source_config() {
         fi
     done < "$file"
 
+    # shellcheck disable=SC1090
     source "$file"
 }
 
@@ -122,6 +120,7 @@ safe_source_preset_config() {
         fi
     done < "$file"
 
+    # shellcheck disable=SC1090
     source "$file"
 }
 
@@ -136,6 +135,19 @@ validate_url() {
 validate_interface_name() {
     local interface="$1"
     [[ "$interface" =~ ^[A-Za-z0-9_.:-]+$ ]]
+}
+
+# 输出可用网络接口，每行一个；过滤回环和常见虚拟接口。
+list_network_interfaces() {
+    local interface_path interface
+    for interface_path in /sys/class/net/*; do
+        [[ -e "$interface_path" ]] || continue
+        interface="${interface_path##*/}"
+        case "$interface" in
+            lo|docker*|veth*|br-*) continue ;;
+        esac
+        validate_interface_name "$interface" && printf '%s\n' "$interface"
+    done
 }
 
 escape_sed_replacement() {
@@ -197,7 +209,8 @@ load_target_config() {
 
 # 安全的网络接口检测 - 自动选择第一个可用接口
 detect_network_interface() {
-    local interfaces=($(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-"))
+    local -a interfaces=()
+    mapfile -t interfaces < <(list_network_interfaces)
 
     if [[ ${#interfaces[@]} -eq 0 ]]; then
         echo "未找到可用的网络接口" >&2
@@ -205,7 +218,7 @@ detect_network_interface() {
     fi
 
     # 自动选择第一个可用接口，优先选择以eth、ens、enp开头的接口
-    local selected_interface=""
+    local selected_interface="" interface
     for interface in "${interfaces[@]}"; do
         # 检查接口是否真正可用（有统计文件）
         if [[ -r "/sys/class/net/$interface/statistics/rx_bytes" ]] && [[ -r "/sys/class/net/$interface/statistics/tx_bytes" ]]; then
@@ -247,7 +260,8 @@ detect_network_interface() {
 # 验证线程数
 validate_threads() {
     local threads="$1"
-    local max_cores=$(nproc)
+    local max_cores
+    max_cores=$(nproc)
     local max_threads=$((max_cores * 4))
 
     if ! [[ "$threads" =~ ^[1-9][0-9]*$ ]]; then
@@ -257,7 +271,7 @@ validate_threads() {
 
     if [[ $threads -gt $max_threads ]]; then
         echo -e "${WARNING}  ⚠️  线程数过高（推荐最大：$max_threads），可能影响系统性能${RESET}"
-        read -p "  是否继续？(y/N)：" confirm
+        read -r -p "  是否继续？(y/N)：" confirm
         [[ "$confirm" =~ ^[Yy]$ ]] || return 1
     fi
 
@@ -341,65 +355,6 @@ load_config() {
     safe_source_config "$CONFIG_FILE" LAST_URL LAST_THREADS LAST_INTERFACE INSTALL_TIME USAGE_COUNT LAST_USED || return 1
 }
 
-# 获取服务状态信息
-get_service_info() {
-    if systemctl is-active --quiet $SERVICE_NAME; then
-        local pid=$(systemctl show -p MainPID --value $SERVICE_NAME 2>/dev/null)
-        local uptime=$(systemctl show -p ActiveEnterTimestamp --value $SERVICE_NAME 2>/dev/null | cut -d' ' -f2-3)
-        printf "${SUCCESS}服务状态：${WHITE}%-8s${RESET}    ${SUCCESS}进程PID：${WHITE}%-8s${RESET}\n" "运行中" "${pid:-"N/A"}"
-        [[ -n "$uptime" ]] && printf "${INFO}启动时间：${WHITE}%s${RESET}\n" "$uptime"
-    else
-        printf "${DANGER}服务状态：${WHITE}%-8s${RESET}\n" "已停止"
-    fi
-}
-
-# 获取增强的系统信息
-get_system_info() {
-    # 基本系统信息
-    local hostname=$(hostname 2>/dev/null || echo "未知")
-    local kernel=$(uname -r 2>/dev/null || echo "未知")
-    local uptime_info=$(uptime 2>/dev/null | awk -F'up ' '{print $2}' | awk -F',' '{print $1}' || echo "未知")
-
-    # CPU信息
-    local cpu_cores=$(nproc 2>/dev/null || echo "未知")
-    local cpu_model=$(grep "model name" /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2 | xargs || echo "未知")
-
-    # 内存信息
-    local mem_total mem_used mem_free
-    if [[ -r /proc/meminfo ]]; then
-        mem_total=$(awk '/MemTotal/ {printf "%.2f GB", $2/1024/1024}' /proc/meminfo)
-        mem_free=$(awk '/MemAvailable/ {printf "%.2f GB", $2/1024/1024}' /proc/meminfo)
-        mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.2f GB", $3/1024}' || echo "未知")
-    else
-        mem_total="未知"; mem_used="未知"; mem_free="未知"
-    fi
-
-    # 磁盘信息
-    local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}' || echo "未知")
-
-    # 网络接口信息
-    local interfaces_count=$(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-" | wc -l || echo 0)
-
-    # 负载信息
-    local load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "未知")
-
-    # 格式化显示
-    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
-        "主机名：" "$hostname" \
-        "内核：" "$kernel"
-    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
-        "运行时间：" "$uptime_info" \
-        "CPU核心：" "$cpu_cores"
-    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
-        "内存使用：" "$mem_used" \
-        "总内存：" "$mem_total"
-    printf "${INFO}%-12s${WHITE}%-20s${RESET}    ${INFO}%-12s${WHITE}%-20s${RESET}\n" \
-        "磁盘使用：" "$disk_usage" \
-        "网络接口：" "$interfaces_count"
-    printf "${INFO}%-12s${WHITE}%-50s${RESET}\n" \
-        "系统负载：" "$load_avg"
-}
-
 # ──────────────────────────────── 快捷键管理 ──────────────────────────────────
 
 # 创建快捷键脚本
@@ -409,7 +364,8 @@ create_shortcut() {
     [[ "$shortcut_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]] || shortcut_name="$DEFAULT_SHORTCUT"
     local shortcut_path="/usr/local/bin/$shortcut_name"
     local script_path="$0"
-    local script_dir=$(dirname "$(readlink -f "$script_path")")
+    local script_dir
+    script_dir=$(dirname "$(readlink -f "$script_path")")
 
     echo -e "${INFO}正在设置快捷键 ${PRIMARY}$shortcut_name${RESET}${INFO}...${RESET}"
 
@@ -618,7 +574,7 @@ echo -e "\e[36m传入参数：$*\e[0m"
 if [[ -z "$INTERFACE" ]]; then
     echo -e "\e[31m❌ 错误：未指定网络接口\e[0m"
     echo -e "\e[36m用法：$0 <网络接口名>\e[0m"
-    read -p "按回车继续..."
+    read -r -p "按回车继续..."
     exit 1
 fi
 
@@ -628,7 +584,7 @@ if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
     echo -e "\e[31m❌ 错误：网络接口 '$INTERFACE' 不存在\e[0m"
     echo -e "\e[36m可用接口：\e[0m"
     ls -la /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -10
-    read -p "按回车继续..."
+    read -r -p "按回车继续..."
     exit 1
 fi
 
@@ -640,7 +596,7 @@ if [[ ! -r "/sys/class/net/$INTERFACE/statistics/rx_bytes" ]] || [[ ! -r "/sys/c
     ls -la "/sys/class/net/$INTERFACE/statistics/" 2>/dev/null | head -5
     echo -e "\e[36m当前用户：$(whoami)\e[0m"
     echo -e "\e[36m请确保以root权限运行\e[0m"
-    read -p "按回车继续..."
+    read -r -p "按回车继续..."
     exit 1
 fi
 
@@ -994,7 +950,7 @@ start_service() {
     fi
     echo -e "    ${SUCCESS}[8]${RESET} ${WHITE}自定义URL${RESET}"
     echo
-    read -p "  请选择 [1]: " url_choice
+    read -r -p "  请选择 [1]: " url_choice
     url_choice=${url_choice:-1}
 
     case $url_choice in
@@ -1006,30 +962,31 @@ start_service() {
         6) url="https://gra.proof.ovh.net/files/10Gb.dat" ;;
         7) url="${LAST_URL:-http://hkg.download.datapacket.com/100mb.bin}" ;;
         8)
-            read -p "  请输入自定义URL：" url
+            read -r -p "  请输入自定义URL：" url
             url=${url:-"http://hkg.download.datapacket.com/100mb.bin"}
             ;;
         *) url="http://hkg.download.datapacket.com/100mb.bin" ;;
     esac
     if ! validate_url "$url"; then
         echo -e "${DANGER}❌ URL 必须以 http:// 或 https:// 开头，且不能包含空格、引号、反斜杠、反引号或 $ 符号${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
         return
     fi
 
     # 线程数配置
-    local cpu_cores=$(nproc)
+    local cpu_cores
+    cpu_cores=$(nproc)
     local recommended_threads=$((cpu_cores * 2))
     printf "${INFO}%-12s${WHITE}%-12s${RESET}    ${INFO}%-12s${WHITE}%-12s${RESET}\n" \
         "CPU核心：" "$cpu_cores" "推荐线程：" "$recommended_threads"
     if [[ -n "$LAST_THREADS" ]]; then
         echo -e "${INFO}上次使用：${WHITE}$LAST_THREADS${RESET}"
     fi
-    read -p "请输入线程数（回车使用推荐）：" threads
+    read -r -p "请输入线程数（回车使用推荐）：" threads
     threads=${threads:-${LAST_THREADS:-$recommended_threads}}
 
     if ! validate_threads "$threads"; then
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
         return
     fi
 
@@ -1041,7 +998,7 @@ start_service() {
     printf "${INFO}%-12s${WHITE}%s${RESET}\n" "线程数量：" "$threads"
     echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo
-    read -p "确认启动？(Y/n)：" confirm
+    read -r -p "确认启动？(Y/n)：" confirm
     [[ "$confirm" =~ ^[Nn]$ ]] && return
 
     # 更新systemd服务文件中的URL和线程数
@@ -1065,7 +1022,7 @@ start_service() {
         fi
     fi
 
-    read -p "按回车返回菜单..."
+    read -r -p "按回车返回菜单..."
 }
 
 # 停止服务
@@ -1076,7 +1033,7 @@ stop_service() {
         pkill -f "curl.*cloudflare" 2>/dev/null
         echo -e "${SUCCESS}✅ 服务已停止${RESET}"
     fi
-    read -p "按回车返回菜单..."
+    read -r -p "按回车返回菜单..."
 }
 
 # 重启服务
@@ -1086,7 +1043,7 @@ restart_service() {
     if check_command "重启失败"; then
         echo -e "${SUCCESS}✅ 服务已重启${RESET}"
     fi
-    read -p "按回车返回菜单..."
+    read -r -p "按回车返回菜单..."
 }
 
 # 显示监控
@@ -1107,7 +1064,7 @@ show_monitor() {
         init_service
         if [[ ! -f "$MONITOR_SCRIPT" ]]; then
             echo -e "${DANGER}❌ 监控脚本创建失败${RESET}"
-            read -p "按回车返回菜单..."
+            read -r -p "按回车返回菜单..."
             return
         fi
     fi
@@ -1140,8 +1097,8 @@ show_monitor() {
             echo -e "${DANGER}❌ 网络接口检测失败${RESET}"
             echo -e "${INFO}检测结果：${WHITE}$interface${RESET}"
             echo -e "${INFO}可用接口列表：${RESET}"
-            ls -la /sys/class/net/ 2>/dev/null | grep -v -E "lo|docker|veth|br-" | head -5
-            read -p "按回车返回菜单..."
+            list_network_interfaces | head -5
+            read -r -p "按回车返回菜单..."
             return
         fi
     fi
@@ -1149,7 +1106,7 @@ show_monitor() {
     # 验证接口有效性
     if [[ ! -d "/sys/class/net/$interface" ]]; then
         echo -e "${DANGER}❌ 网络接口无效：$interface${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
         return
     fi
 
@@ -1157,7 +1114,7 @@ show_monitor() {
     if [[ ! -r "/sys/class/net/$interface/statistics/rx_bytes" ]] || [[ ! -r "/sys/class/net/$interface/statistics/tx_bytes" ]]; then
         echo -e "${DANGER}❌ 无法读取网络接口统计信息${RESET}"
         echo -e "${INFO}请确保以root权限运行此脚本${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
         return
     fi
 
@@ -1172,7 +1129,7 @@ show_monitor() {
         echo -e "${DANGER}❌ 监控脚本执行失败${RESET}"
         echo -e "${INFO}脚本路径：${WHITE}$MONITOR_SCRIPT${RESET}"
         echo -e "${INFO}网络接口：${WHITE}$interface${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
     fi
 }
 
@@ -1180,7 +1137,7 @@ show_monitor() {
 show_logs() {
     if [[ ! -f "$LOG_FILE" ]]; then
         echo -e "${DANGER}❌ 日志文件不存在${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
         return
     fi
 
@@ -1199,7 +1156,8 @@ shortcut_management() {
     echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
     echo
 
-    local current_shortcut=$(get_shortcut_name)
+    local current_shortcut
+    current_shortcut=$(get_shortcut_name)
     [[ -z "$current_shortcut" ]] && current_shortcut="$DEFAULT_SHORTCUT"
     if [[ -f "$SHORTCUT_CONFIG" ]]; then
         safe_source_config "$SHORTCUT_CONFIG" SHORTCUT_NAME SHORTCUT_PATH CREATED_TIME || SHORTCUT_PATH=""
@@ -1221,16 +1179,16 @@ shortcut_management() {
     echo -e "${WHITE}0) 返回主菜单${RESET}"
     echo
 
-    read -p "请选择 [0-3]：" choice
+    read -r -p "请选择 [0-3]：" choice
     case $choice in
         1)
             create_shortcut "$current_shortcut"
-            read -p "按回车继续..."
+            read -r -p "按回车继续..."
             shortcut_management
             ;;
         2)
             echo -e "${INFO}当前快捷键：${PRIMARY}$current_shortcut${RESET}"
-            read -p "请输入新的快捷键名称（英文字母开头）：" new_name
+            read -r -p "请输入新的快捷键名称（英文字母开头）：" new_name
 
             # 验证快捷键名称
             if [[ ! "$new_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]; then
@@ -1243,12 +1201,12 @@ shortcut_management() {
                 create_shortcut "$new_name"
                 echo -e "${SUCCESS}✅ 快捷键已更新为：${PRIMARY}$new_name${RESET}"
             fi
-            read -p "按回车继续..."
+            read -r -p "按回车继续..."
             shortcut_management
             ;;
         3)
             remove_shortcut
-            read -p "按回车继续..."
+            read -r -p "按回车继续..."
             shortcut_management
             ;;
         0) return ;;
@@ -1289,7 +1247,8 @@ test_monitor() {
     echo -e "${INFO}2. 检查网络接口...${RESET}"
     echo -e "${INFO}可用网络接口列表：${RESET}"
     if ls /sys/class/net/ 2>/dev/null; then
-        local interfaces=($(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-"))
+        local -a interfaces=()
+        mapfile -t interfaces < <(list_network_interfaces)
         echo -e "${INFO}过滤后的接口：${WHITE}${interfaces[*]}${RESET}"
 
         if [[ ${#interfaces[@]} -gt 0 ]]; then
@@ -1299,14 +1258,16 @@ test_monitor() {
             # 3. 检查接口权限
             echo -e "${INFO}3. 检查接口统计文件权限...${RESET}"
             if [[ -r "/sys/class/net/$test_interface/statistics/rx_bytes" ]]; then
-                local rx_bytes=$(cat "/sys/class/net/$test_interface/statistics/rx_bytes" 2>/dev/null)
+                local rx_bytes
+                rx_bytes=$(cat "/sys/class/net/$test_interface/statistics/rx_bytes" 2>/dev/null)
                 echo -e "${SUCCESS}✅ 可读取RX统计：$rx_bytes bytes${RESET}"
             else
                 echo -e "${DANGER}❌ 无法读取RX统计文件${RESET}"
             fi
 
             if [[ -r "/sys/class/net/$test_interface/statistics/tx_bytes" ]]; then
-                local tx_bytes=$(cat "/sys/class/net/$test_interface/statistics/tx_bytes" 2>/dev/null)
+                local tx_bytes
+                tx_bytes=$(cat "/sys/class/net/$test_interface/statistics/tx_bytes" 2>/dev/null)
                 echo -e "${SUCCESS}✅ 可读取TX统计：$tx_bytes bytes${RESET}"
             else
                 echo -e "${DANGER}❌ 无法读取TX统计文件${RESET}"
@@ -1377,7 +1338,7 @@ TESTEOF
     echo -e "${PRIMARY}如果测试正常，实时监控应该可以工作${RESET}"
     echo -e "${WARNING}如果仍有问题，请检查以上失败的项目${RESET}"
     echo
-    read -p "按回车返回菜单..."
+    read -r -p "按回车返回菜单..."
 }
 
 # 高级监控功能
@@ -1399,7 +1360,7 @@ advanced_monitor() {
 
     if [[ -z "$interface" ]] || [[ ! -d "/sys/class/net/$interface" ]]; then
         echo -e "${DANGER}❌ 无法检测到有效的网络接口${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
         return
     fi
 
@@ -1409,7 +1370,7 @@ advanced_monitor() {
     # 配置选项
     echo -e "${PRIMARY}配置监控参数：${RESET}"
     echo -e "${INFO}1. 刷新间隔 (1-10秒，推荐1秒)${RESET}"
-    read -p "请输入刷新间隔 [1]：" refresh_interval
+    read -r -p "请输入刷新间隔 [1]：" refresh_interval
     refresh_interval=${refresh_interval:-1}
 
     if ! [[ "$refresh_interval" =~ ^([1-9]|10)$ ]]; then
@@ -1417,10 +1378,10 @@ advanced_monitor() {
     fi
 
     echo -e "${INFO}2. 流量警告阈值 (MB/s，0表示禁用)${RESET}"
-    read -p "请输入下载速度警告阈值 [100]：" dl_threshold
+    read -r -p "请输入下载速度警告阈值 [100]：" dl_threshold
     dl_threshold=${dl_threshold:-100}
 
-    read -p "请输入上传速度警告阈值 [50]：" ul_threshold
+    read -r -p "请输入上传速度警告阈值 [50]：" ul_threshold
     ul_threshold=${ul_threshold:-50}
 
     # 转换为字节
@@ -1428,7 +1389,7 @@ advanced_monitor() {
     local ul_threshold_bytes=$((ul_threshold * 1024 * 1024))
 
     echo -e "${INFO}3. 是否启用历史峰值记录？ [y/N]${RESET}"
-    read -p "" enable_history
+    read -r -p "" enable_history
     local enable_history_flag=false
     [[ "$enable_history" =~ ^[Yy]$ ]] && enable_history_flag=true
 
@@ -1450,8 +1411,9 @@ advanced_monitor_loop() {
     local enable_history="$5"
 
     # 初始化变量
-    local RX_PREV=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
-    local TX_PREV=$(cat "/sys/class/net/$interface/statistics/tx_bytes" 2>/dev/null || echo 0)
+    local RX_PREV TX_PREV
+    RX_PREV=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+    TX_PREV=$(cat "/sys/class/net/$interface/statistics/tx_bytes" 2>/dev/null || echo 0)
     local RX_TOTAL=0 TX_TOTAL=0 DURATION=0
     local RX_PEAK=0 TX_PEAK=0 RX_PEAK_TIME="" TX_PEAK_TIME=""
     local ALERT_COUNT=0
@@ -1478,8 +1440,9 @@ advanced_monitor_loop() {
         ((DURATION += refresh_interval))
 
         # 读取当前值
-        local RX_CUR=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
-        local TX_CUR=$(cat "/sys/class/net/$interface/statistics/tx_bytes" 2>/dev/null || echo 0)
+        local RX_CUR TX_CUR
+        RX_CUR=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+        TX_CUR=$(cat "/sys/class/net/$interface/statistics/tx_bytes" 2>/dev/null || echo 0)
 
         # 计算速率
         local RX_RATE=$((RX_CUR >= RX_PREV ? (RX_CUR - RX_PREV) / refresh_interval : 0))
@@ -1507,9 +1470,9 @@ advanced_monitor_loop() {
 
         # 历史数据记录
         if [[ "$enable_history" == "true" ]]; then
-            RX_HISTORY+=($RX_RATE)
-            TX_HISTORY+=($TX_RATE)
-            TIME_HISTORY+=($(date '+%H:%M:%S'))
+            RX_HISTORY+=("$RX_RATE")
+            TX_HISTORY+=("$TX_RATE")
+            TIME_HISTORY+=("$(date '+%H:%M:%S')")
 
             # 限制历史数据大小
             if [[ ${#RX_HISTORY[@]} -gt $HISTORY_SIZE ]]; then
@@ -1532,12 +1495,13 @@ advanced_monitor_loop() {
         fi
 
         # 格式化显示
-        local rx_speed=$(format_bytes_per_sec $RX_RATE)
-        local tx_speed=$(format_bytes_per_sec $TX_RATE)
-        local rx_total=$(format_bytes $RX_TOTAL)
-        local tx_total=$(format_bytes $TX_TOTAL)
-        local rx_peak_speed=$(format_bytes_per_sec $RX_PEAK)
-        local tx_peak_speed=$(format_bytes_per_sec $TX_PEAK)
+        local rx_speed tx_speed rx_total tx_total rx_peak_speed tx_peak_speed
+        rx_speed=$(format_bytes_per_sec "$RX_RATE")
+        tx_speed=$(format_bytes_per_sec "$TX_RATE")
+        rx_total=$(format_bytes "$RX_TOTAL")
+        tx_total=$(format_bytes "$TX_TOTAL")
+        rx_peak_speed=$(format_bytes_per_sec "$RX_PEAK")
+        tx_peak_speed=$(format_bytes_per_sec "$TX_PEAK")
 
         # 计算运行时间
         local hours=$((DURATION / 3600))
@@ -1547,15 +1511,17 @@ advanced_monitor_loop() {
         # 计算平均值
         local avg_rx=$(( DURATION > 0 ? RX_TOTAL / DURATION : 0 ))
         local avg_tx=$(( DURATION > 0 ? TX_TOTAL / DURATION : 0 ))
-        local avg_rx_speed=$(format_bytes_per_sec $avg_rx)
-        local avg_tx_speed=$(format_bytes_per_sec $avg_tx)
+        local avg_rx_speed avg_tx_speed
+        avg_rx_speed=$(format_bytes_per_sec "$avg_rx")
+        avg_tx_speed=$(format_bytes_per_sec "$avg_tx")
 
         # 生成进度条
         local max_speed=$(( RX_RATE > TX_RATE ? RX_RATE : TX_RATE ))
         [[ $max_speed -lt $((10*1024*1024)) ]] && max_speed=$((10*1024*1024))
 
-        local rx_bar=$(generate_bar $RX_RATE $max_speed 40)
-        local tx_bar=$(generate_bar $TX_RATE $max_speed 40)
+        local rx_bar tx_bar
+        rx_bar=$(generate_bar "$RX_RATE" "$max_speed" 40)
+        tx_bar=$(generate_bar "$TX_RATE" "$max_speed" 40)
 
         # 显示界面
         printf "\033[2J\033[H"  # 清屏并移到顶部
@@ -1643,7 +1609,8 @@ generate_bar() {
 
 # 简单ASCII图表显示
 display_ascii_chart() {
-    local data=($1)
+    local -a data=()
+    read -r -a data <<< "$1"
     local label="$2"
     local max_val=0
 
@@ -1677,7 +1644,8 @@ display_ascii_chart() {
 save_monitor_data() {
     local interface="$1" rx_total="$2" tx_total="$3" duration="$4" rx_peak="$5" tx_peak="$6"
     local data_file="/root/milier_monitor_data.log"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
     {
         echo "==============================="
@@ -1702,6 +1670,16 @@ save_monitor_data() {
     echo -e "${SUCCESS}✅ 数据已保存到: $data_file${RESET}"
 }
 
+# 比较语义版本号，仅当候选版本更高时返回成功。
+version_is_newer() {
+    local candidate="${1#v}" current="${2#v}" newest
+    [[ "$candidate" =~ ^[0-9]+([.][0-9]+)*$ ]] || return 1
+    [[ "$current" =~ ^[0-9]+([.][0-9]+)*$ ]] || return 1
+    [[ "$candidate" != "$current" ]] || return 1
+    newest=$(printf '%s\n%s\n' "$current" "$candidate" | sort -V | tail -n 1)
+    [[ "$newest" == "$candidate" ]]
+}
+
 # 检查更新功能
 check_update() {
     clear
@@ -1713,18 +1691,34 @@ check_update() {
 
     # 获取当前版本
     local current_version="$SCRIPT_VERSION"
-    local script_url="https://xh.813099.xyz/milier_flow_latest.sh"
-    local temp_file="/tmp/milier_latest_check.sh"
+    local current_script temp_file script_url download_ok=false
+    current_script=$(readlink -f "$0")
+    temp_file=$(mktemp /tmp/milier_latest_check.XXXXXX.sh) || {
+        echo -e "${DANGER}❌ 创建临时文件失败${RESET}"
+        read -r -p "按回车返回菜单..."
+        return
+    }
 
-    # 下载最新版本检查
-    if curl -fsSL "$script_url" -o "$temp_file" --max-time 15; then
+    # 主地址异常时切换到 GitHub；只接受语法检查通过的脚本。
+    for script_url in \
+        "https://xh.813099.xyz/milier_flow_latest.sh" \
+        "https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"; do
+        if curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 "$script_url" -o "$temp_file" \
+            && bash -n "$temp_file" 2>/dev/null; then
+            download_ok=true
+            break
+        fi
+    done
+
+    if [[ "$download_ok" == "true" ]]; then
         echo -e "${SUCCESS}✅ 获取最新版本信息成功${RESET}"
 
         # 优先读取版本号，取不到时再退回文件大小判断。
-        local current_size=$(stat -c%s "$0" 2>/dev/null || echo 0)
-        local latest_size=$(stat -c%s "$temp_file" 2>/dev/null || echo 0)
-        local size_diff=$(( latest_size > current_size ? latest_size - current_size : current_size - latest_size ))
-        local latest_version latest_hash has_update=false update_reason=""
+        local current_size latest_size size_diff
+        local latest_version latest_hash has_update=false update_reason="" remote_is_older=false
+        current_size=$(stat -c%s "$current_script" 2>/dev/null || echo 0)
+        latest_size=$(stat -c%s "$temp_file" 2>/dev/null || echo 0)
+        size_diff=$(( latest_size > current_size ? latest_size - current_size : current_size - latest_size ))
         latest_version=$(awk -F= '/^SCRIPT_VERSION=/{gsub(/"/, "", $2); print $2; exit}' "$temp_file" 2>/dev/null)
         if command -v sha256sum &>/dev/null; then
             latest_hash=$(sha256sum "$temp_file" | awk '{print $1}')
@@ -1732,16 +1726,18 @@ check_update() {
 
         echo -e "${INFO}当前版本：${WHITE}$current_version${RESET}"
         echo -e "${INFO}远端版本：${WHITE}${latest_version:-未知}${RESET}"
-        echo -e "${INFO}当前脚本大小：${WHITE}$(format_file_size $current_size)${RESET}"
-        echo -e "${INFO}最新脚本大小：${WHITE}$(format_file_size $latest_size)${RESET}"
+        echo -e "${INFO}当前脚本大小：${WHITE}$(format_file_size "$current_size")${RESET}"
+        echo -e "${INFO}最新脚本大小：${WHITE}$(format_file_size "$latest_size")${RESET}"
         [[ -n "$latest_hash" ]] && echo -e "${INFO}远端校验：${WHITE}${latest_hash:0:16}...${RESET}"
 
-        if [[ -n "$latest_version" && "$latest_version" != "$current_version" ]]; then
+        if version_is_newer "$latest_version" "$current_version"; then
             has_update=true
-            update_reason="版本差异：$current_version -> $latest_version"
+            update_reason="版本升级：$current_version -> $latest_version"
+        elif [[ -n "$latest_version" && "$latest_version" != "$current_version" ]]; then
+            remote_is_older=true
         elif [[ -z "$latest_version" && $size_diff -gt 1024 ]]; then
             has_update=true
-            update_reason="无法读取远端版本，大小差异：$(format_file_size $size_diff)"
+            update_reason="无法读取远端版本，大小差异：$(format_file_size "$size_diff")"
         fi
 
         if [[ "$has_update" == "true" ]]; then
@@ -1750,31 +1746,37 @@ check_update() {
             echo -e "${INFO}是否要更新到最新版本？${RESET}"
             echo -e "${WARNING}注意：更新会覆盖当前脚本，但配置文件会保留${RESET}"
             echo
-            read -p "确认更新？ (y/N): " confirm_update
+            read -r -p "确认更新？ (y/N): " confirm_update
 
             if [[ "$confirm_update" =~ ^[Yy]$ ]]; then
                 echo -e "${INFO}正在备份当前脚本...${RESET}"
-                local backup_file="${0}.backup.$(date +%Y%m%d_%H%M%S)"
-                cp "$0" "$backup_file"
+                local backup_file staged_file
+                backup_file="${current_script}.backup.$(date +%Y%m%d_%H%M%S)"
+                staged_file="${current_script}.new.$$"
+                cp "$current_script" "$backup_file"
 
                 echo -e "${INFO}正在更新脚本...${RESET}"
-                if cp "$temp_file" "$0" && chmod +x "$0"; then
+                if install -m 755 "$temp_file" "$staged_file" && mv -f "$staged_file" "$current_script"; then
                     echo -e "${SUCCESS}✅ 更新完成！${RESET}"
                     echo -e "${WARNING}请重新启动脚本以使用新版本${RESET}"
                     echo
-                    read -p "现在重启脚本？ (Y/n): " restart_now
+                    read -r -p "现在重启脚本？ (Y/n): " restart_now
                     if [[ ! "$restart_now" =~ ^[Nn]$ ]]; then
-                        exec bash "$0"
+                        rm -f "$temp_file"
+                        exec bash "$current_script"
                     fi
                 else
+                    rm -f "$staged_file"
                     echo -e "${DANGER}❌ 更新失败，正在恢复备份...${RESET}"
-                    cp "$backup_file" "$0" 2>/dev/null
+                    cp "$backup_file" "$current_script" 2>/dev/null
                 fi
             else
                 echo -e "${INFO}已取消更新${RESET}"
             fi
+        elif [[ "$remote_is_older" == "true" ]]; then
+            echo -e "${SUCCESS}✅ 当前版本高于远端版本，无需更新${RESET}"
         elif [[ $size_diff -gt 1024 ]]; then
-            echo -e "${WARNING}⚠️  远端版本号相同，但文件大小不同（$(format_file_size $size_diff)）${RESET}"
+            echo -e "${WARNING}⚠️  远端版本号相同，但文件大小不同（$(format_file_size "$size_diff")）${RESET}"
             echo -e "${INFO}这通常是非版本化调整；如需强制更新，请重新运行安装命令${RESET}"
         else
             echo -e "${SUCCESS}✅ 您已经使用的是最新版本！${RESET}"
@@ -1788,7 +1790,7 @@ check_update() {
     fi
 
     echo
-    read -p "按回车返回菜单..."
+    read -r -p "按回车返回菜单..."
 }
 
 # 格式化文件大小
@@ -1827,14 +1829,16 @@ set_traffic_target() {
                 interface="${LAST_INTERFACE}"
             fi
             if [[ -n "$interface" ]] && [[ -d "/sys/class/net/$interface" ]]; then
-                local current_rx=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
-                local target_bytes=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null | cut -d. -f1)
+                local current_rx target_bytes
+                current_rx=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
+                target_bytes=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null | cut -d. -f1)
                 local start_bytes=${TARGET_START_RX:-$current_rx}
                 [[ "$current_rx" =~ ^[0-9]+$ ]] || current_rx=0
                 [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
                 [[ "$start_bytes" =~ ^[0-9]+$ ]] || start_bytes=$current_rx
                 local consumed=$(( current_rx > start_bytes ? current_rx - start_bytes : 0 ))
-                local consumed_gb=$(echo "scale=2; $consumed/1073741824" | bc 2>/dev/null || echo "$((consumed/1073741824))")
+                local consumed_gb
+                consumed_gb=$(echo "scale=2; $consumed/1073741824" | bc 2>/dev/null || echo "$((consumed/1073741824))")
                 local percent=$(( target_bytes > 0 ? consumed * 100 / target_bytes : 0 ))
                 [[ $percent -gt 100 ]] && percent=100
 
@@ -1865,16 +1869,16 @@ set_traffic_target() {
     echo -e "  ${WHITE}[0]${RESET} 返回主菜单"
     echo
 
-    read -p "  请选择 [0-3]：" target_choice
+    read -r -p "  请选择 [0-3]：" target_choice
     case $target_choice in
         1)
             echo
             echo -e "  ${INFO}请输入流量目标（单位：GB）：${RESET}"
-            read -p "  目标流量(GB): " target_gb
+            read -r -p "  目标流量(GB): " target_gb
 
             if ! [[ "$target_gb" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ $(echo "$target_gb == 0" | bc 2>/dev/null) == "1" ]]; then
                 echo -e "  ${DANGER}❌ 请输入有效的数值${RESET}"
-                read -p "  按回车继续..."
+                read -r -p "  按回车继续..."
                 set_traffic_target
                 return
             fi
@@ -1882,20 +1886,21 @@ set_traffic_target() {
             load_config
             local interface="${LAST_INTERFACE}"
             [[ -z "$interface" ]] && interface=$(detect_network_interface 2>/dev/null)
-            local start_rx=$(cat "/sys/class/net/${interface:-eth0}/statistics/rx_bytes" 2>/dev/null || echo 0)
+            local start_rx
+            start_rx=$(cat "/sys/class/net/${interface:-eth0}/statistics/rx_bytes" 2>/dev/null || echo 0)
 
             if save_target_config "$target_gb" "$start_rx" "${interface:-eth0}" "false"; then
                 echo -e "  ${SUCCESS}✅ 流量目标已设置为 ${WHITE}${target_gb} GB${RESET}"
             else
                 echo -e "  ${DANGER}❌ 流量目标保存失败${RESET}"
             fi
-            read -p "  按回车继续..."
+            read -r -p "  按回车继续..."
             set_traffic_target
             ;;
         2)
             rm -f "$target_file"
             echo -e "  ${SUCCESS}✅ 流量目标已清除${RESET}"
-            read -p "  按回车继续..."
+            read -r -p "  按回车继续..."
             set_traffic_target
             ;;
         3)
@@ -1903,7 +1908,7 @@ set_traffic_target() {
                 if load_target_config && [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
                     save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "true" "${TARGET_PREV_CONSUMED:-0}" || {
                         echo -e "  ${DANGER}❌ 自动停止配置保存失败${RESET}"
-                        read -p "  按回车继续..."
+                        read -r -p "  按回车继续..."
                         set_traffic_target
                         return
                     }
@@ -1963,7 +1968,7 @@ TARGETEOF
             else
                 echo -e "  ${WARNING}请先设置流量目标${RESET}"
             fi
-            read -p "  按回车继续..."
+            read -r -p "  按回车继续..."
             set_traffic_target
             ;;
         0) return ;;
@@ -1986,19 +1991,22 @@ speed_test() {
     echo -e "  ${GRAY}测试文件：香港 Datapacket（取前10MB）${RESET}"
     echo
 
-    local start_time=$(date +%s%N)
+    local start_time
+    start_time=$(date +%s%N)
     local bytes_downloaded=0
 
     # 下载测试 (10MB快速测试)
     local test_url="http://hkg.download.datapacket.com/100mb.bin"
     bytes_downloaded=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 --connect-timeout 5 -r 0-10485759 "$test_url" 2>/dev/null)
-    local end_time=$(date +%s%N)
+    local end_time
+    end_time=$(date +%s%N)
 
     if [[ -n "$bytes_downloaded" ]] && [[ "$bytes_downloaded" -gt 0 ]] 2>/dev/null; then
         local elapsed_ms=$(( (end_time - start_time) / 1000000 ))
         [[ $elapsed_ms -eq 0 ]] && elapsed_ms=1
         local speed_bps=$(( bytes_downloaded * 1000 / elapsed_ms ))
-        local speed_mbps=$(echo "scale=2; $speed_bps / 1048576" | bc 2>/dev/null || echo "$((speed_bps / 1048576))")
+        local speed_mbps
+        speed_mbps=$(echo "scale=2; $speed_bps / 1048576" | bc 2>/dev/null || echo "$((speed_bps / 1048576))")
 
         echo -e "  ${SUCCESS}✅ 测试完成${RESET}"
         echo
@@ -2022,7 +2030,7 @@ speed_test() {
     fi
 
     echo
-    read -p "  按回车返回菜单..."
+    read -r -p "  按回车返回菜单..."
 }
 
 # 卸载服务
@@ -2035,7 +2043,7 @@ uninstall_service() {
     echo
     echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo
-    read -p "确认卸载请输入 'ok'：" confirm
+    read -r -p "确认卸载请输入 'ok'：" confirm
 
     if [[ "$confirm" == "ok" ]]; then
         echo -e "${WARNING}正在彻底卸载...${RESET}"
@@ -2089,7 +2097,8 @@ uninstall_service() {
         rm -f "/usr/local/bin/$DEFAULT_SHORTCUT"
 
         # 10. 删除自身脚本
-        local self_path="$(readlink -f "$0")"
+        local self_path
+        self_path=$(readlink -f "$0")
 
         echo
         echo -e "${SUCCESS}✅ 卸载完成，已彻底清理所有文件、配置和缓存${RESET}"
@@ -2100,7 +2109,7 @@ uninstall_service() {
         exit 0
     else
         echo -e "${WARNING}操作已取消${RESET}"
-        read -p "按回车返回菜单..."
+        read -r -p "按回车返回菜单..."
     fi
 }
 
@@ -2108,7 +2117,7 @@ uninstall_service() {
 
 # 获取服务状态标识
 get_status_badge() {
-    if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         echo -e "${SUCCESS}● 运行中${RESET}"
     else
         echo -e "${DANGER}○ 已停止${RESET}"
@@ -2120,80 +2129,106 @@ get_target_summary() {
     if load_target_config; then
         if [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
             local auto_stop=""
-            [[ "$TARGET_AUTO_STOP" == "true" ]] && auto_stop=" ${MUTED}/ 自动停${RESET}"
-            echo -e "${LABEL}目标${RESET} ${VALUE}${TARGET_GB}GB${RESET}${auto_stop}"
+            [[ "$TARGET_AUTO_STOP" == "true" ]] && auto_stop=" ${MUTED}· 自动停止${RESET}"
+            echo -e "${VALUE}${TARGET_GB} GB${RESET}${auto_stop}"
             return
         fi
     fi
-    echo -e "${LABEL}目标${RESET} ${GRAY}未设置${RESET}"
+    echo -e "${GRAY}未设置${RESET}"
+}
+
+# 主菜单中的状态行和操作项统一由两个函数输出，保持竖排对齐。
+print_status_row() {
+    local label="$1" value="$2"
+    printf "  %b%s%b  %b\n" "$LABEL" "$label" "$RESET" "$value"
+}
+
+print_menu_item() {
+    local key="$1" label="$2"
+    printf "  %b[%s]%b %b%s%b\n" "$KEY" "$key" "$RESET" "$WHITE" "$label" "$RESET"
 }
 
 show_menu() {
     clear
 
     echo
-    echo -e "  ${PANEL}╭────────────────────────────────────────────────────────────╮${RESET}"
-    echo -e "  ${PANEL}│${RESET} ${PRIMARY}${BOLD}米粒儿 VPS 流量控制台${RESET} ${MUTED}${SCRIPT_VERSION}${RESET}                          ${PANEL}│${RESET}"
-    echo -e "  ${PANEL}╰────────────────────────────────────────────────────────────╯${RESET}"
+    echo -e "  ${PRIMARY}${BOLD}米粒儿 VPS 流量控制台${RESET}  ${MUTED}${SCRIPT_VERSION}${RESET}"
+    echo -e "  ${PANEL}────────────────────────────────────────────${RESET}"
     echo
 
-    local status_badge=$(get_status_badge)
-    local target_summary=$(get_target_summary)
+    local status_badge target_summary
+    status_badge=$(get_status_badge)
+    target_summary=$(get_target_summary)
     local pid_value="--"
-    if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
-        local pid=$(systemctl show -p MainPID --value $SERVICE_NAME 2>/dev/null)
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        local pid
+        pid=$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null)
         pid_value="${pid:-N/A}"
     fi
 
-    local hostname=$(hostname 2>/dev/null || echo "未知")
-    local cpu_cores=$(nproc 2>/dev/null || echo "?")
-    local mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.1f", $3/1024}' || echo "?")
-    local mem_total=$(awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "?")
-    local disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}' || echo "未知")
-    local load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "未知")
-    local interfaces_count=$(ls /sys/class/net 2>/dev/null | grep -v -E "lo|docker|veth|br-" | wc -l || echo 0)
+    local host_name cpu_cores mem_used mem_total disk_usage load_avg interfaces_count
+    host_name=$(hostname 2>/dev/null || echo "未知")
+    cpu_cores=$(nproc 2>/dev/null || echo "?")
+    mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.1f", $3/1024}' || echo "?")
+    mem_total=$(awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "?")
+    disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}' || echo "未知")
+    load_avg=$(awk '{print $1", "$2", "$3}' /proc/loadavg 2>/dev/null || echo "未知")
+    interfaces_count=$(list_network_interfaces | awk 'END {print NR+0}')
+    interfaces_count="${interfaces_count:-0}"
 
     load_config || true
-    local last_line="${MUTED}暂无历史启动配置${RESET}"
+    local last_config="${MUTED}暂无历史配置${RESET}"
     if [[ -n "$LAST_URL" ]]; then
         local short_url="$LAST_URL"
-        [[ ${#short_url} -gt 48 ]] && short_url="${short_url:0:45}..."
-        last_line="${LABEL}上次${RESET} ${VALUE}${LAST_THREADS:-?}线程${RESET} ${MUTED}/ ${LAST_INTERFACE:-未知} / ${short_url}${RESET}"
+        [[ ${#short_url} -gt 42 ]] && short_url="${short_url:0:39}..."
+        last_config="${VALUE}${LAST_THREADS:-?} 线程${RESET} ${MUTED}· ${LAST_INTERFACE:-未知} · ${short_url}${RESET}"
     fi
 
-    echo -e "  ${MUTED}STATUS${RESET}"
-    echo -e "  ${LABEL}服务${RESET} ${status_badge}   ${LABEL}PID${RESET} ${VALUE}${pid_value}${RESET}   ${target_summary}"
-    echo -e "  ${LABEL}主机${RESET} ${VALUE}${hostname}${RESET}   ${LABEL}CPU${RESET} ${VALUE}${cpu_cores}核${RESET}   ${LABEL}内存${RESET} ${VALUE}${mem_used}/${mem_total}GB${RESET}"
-    echo -e "  ${LABEL}磁盘${RESET} ${VALUE}${disk_usage}${RESET}   ${LABEL}接口${RESET} ${VALUE}${interfaces_count}${RESET}   ${LABEL}负载${RESET} ${VALUE}${load_avg}${RESET}"
-    echo -e "  $last_line"
+    echo -e "  ${MUTED}系统状态${RESET}"
+    print_status_row "服务状态" "${status_badge} ${MUTED}· PID ${pid_value}${RESET}"
+    print_status_row "流量目标" "$target_summary"
+    print_status_row "主机信息" "${VALUE}${host_name}${RESET}"
+    print_status_row "资源占用" "${VALUE}CPU ${cpu_cores} 核 · 内存 ${mem_used}/${mem_total} GB${RESET}"
+    print_status_row "存储网络" "${VALUE}${disk_usage} · ${interfaces_count} 个接口 · 负载 ${load_avg}${RESET}"
+    print_status_row "上次配置" "$last_config"
     if [[ "$USAGE_COUNT" =~ ^[0-9]+$ ]] && [[ $USAGE_COUNT -gt 0 ]]; then
-        echo -e "  ${LABEL}使用${RESET} ${VALUE}${USAGE_COUNT}次${RESET} ${MUTED}/ 最后 ${LAST_USED:-未知}${RESET}"
+        print_status_row "使用记录" "${VALUE}${USAGE_COUNT} 次${RESET} ${MUTED}· ${LAST_USED:-未知}${RESET}"
     fi
     echo
 
-    echo -e "  ${MUTED}ACTIONS${RESET}"
-    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
-    echo -e "    ${KEY}1${RESET} ${WHITE}启动/重配${RESET}       ${KEY}2${RESET} ${WHITE}停止服务${RESET}       ${KEY}3${RESET} ${WHITE}重启服务${RESET}       ${KEY}4${RESET} ${WHITE}流量目标${RESET}"
+    echo -e "  ${MUTED}服务管理${RESET}"
+    print_menu_item "1" "启动或重新配置"
+    print_menu_item "2" "停止服务"
+    print_menu_item "3" "重启服务"
+    print_menu_item "4" "流量目标"
     echo
 
-    echo -e "  ${MUTED}OBSERVE${RESET}"
-    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
-    echo -e "    ${KEY}5${RESET} ${WHITE}实时监控${RESET}       ${KEY}6${RESET} ${WHITE}高级监控${RESET}       ${KEY}7${RESET} ${WHITE}功能诊断${RESET}       ${KEY}8${RESET} ${WHITE}网络测速${RESET}"
+    echo -e "  ${MUTED}监控工具${RESET}"
+    print_menu_item "5" "实时流量监控"
+    print_menu_item "6" "高级流量监控"
+    print_menu_item "7" "功能诊断"
+    print_menu_item "8" "网络测速"
     echo
 
-    echo -e "  ${MUTED}MAINTAIN${RESET}"
-    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
-    echo -e "    ${KEY}9${RESET} ${WHITE}服务日志${RESET}       ${KEY}A${RESET} ${WHITE}快捷键${RESET}         ${KEY}B${RESET} ${WHITE}检查更新${RESET}       ${DANGER}U${RESET} ${WHITE}卸载${RESET}       ${GRAY}0${RESET} ${WHITE}退出${RESET}"
+    echo -e "  ${MUTED}系统维护${RESET}"
+    print_menu_item "9" "查看服务日志"
+    print_menu_item "A" "快捷键管理"
+    print_menu_item "B" "检查脚本更新"
+    printf "  %b[U]%b %b卸载全部服务%b\n" "$DANGER" "$RESET" "$WHITE" "$RESET"
     echo
-    echo -e "  ${PANEL}────────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${MUTED}TG${RESET} ${LINK}t.me/mlvps25221${RESET}"
+    printf "  %b[0]%b %b退出控制台%b\n" "$GRAY" "$RESET" "$WHITE" "$RESET"
     echo
 
     local prompt_text
-    printf -v prompt_text "  ${LABEL}选择操作${RESET} ${MUTED}(1-9/A/B/U/0)${RESET} ${PRIMARY}>${RESET} "
-    read -p "$prompt_text" choice
+    printf -v prompt_text "  %b请选择%b %b(1-9/A/B/U/0)%b %b>%b " \
+        "$LABEL" "$RESET" "$MUTED" "$RESET" "$PRIMARY" "$RESET"
+    if ! IFS= read -r -p "$prompt_text" choice; then
+        echo
+        exit 0
+    fi
+    choice="${choice//[[:space:]]/}"
 
-    case $choice in
+    case "$choice" in
         1) start_service ;;
         2) stop_service ;;
         3) restart_service ;;
@@ -2209,13 +2244,7 @@ show_menu() {
         0)
             clear
             echo
-            echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
-            echo
-            echo -e "  ${SUCCESS}${BOLD}      感谢使用米粒儿VPS流量消耗管理工具!${RESET}"
-            echo
-            echo -e "  ${LINK}      欢迎加入官方TG群: https://t.me/mlvps25221${RESET}"
-            echo
-            echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
+            echo -e "  ${SUCCESS}已退出米粒儿 VPS 流量控制台${RESET}"
             echo
             exit 0
             ;;
@@ -2233,8 +2262,6 @@ detect_system_type() {
     if [[ -f /etc/os-release ]]; then
         source /etc/os-release
         OS_ID="${ID}"
-        OS_VERSION="${VERSION_ID}"
-        OS_NAME="${PRETTY_NAME}"
     fi
 }
 
