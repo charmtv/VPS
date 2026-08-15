@@ -6,7 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-SCRIPT_VERSION="v3.3.1"
+SCRIPT_VERSION="v3.3.2"
 SCRIPT_NAME="milier_flow.sh"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
@@ -31,7 +31,6 @@ WHITE="\e[97m"            # 高亮白：主文字
 GRAY="\e[37m"             # 标准白：次级文字
 MUTED="\e[37m"            # 标准白：弱文字
 PANEL="\e[37m"            # 标准白：分隔线
-LABEL="\e[37m"            # 标准白：字段标签
 VALUE="\e[97m"            # 高亮白：字段值
 KEY="\e[96m"              # 高亮青：操作键
 BOLD="\e[1m"              # 加粗
@@ -41,8 +40,10 @@ RESET="\e[0m"             # 重置
 # 非交互输出、NO_COLOR 或简易终端下关闭颜色控制码。
 if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
     PRIMARY="" SUCCESS="" WARNING="" DANGER="" INFO=""
-    WHITE="" GRAY="" MUTED="" PANEL="" LABEL="" VALUE="" KEY="" BOLD="" REV="" RESET=""
+    WHITE="" GRAY="" MUTED="" PANEL="" VALUE="" KEY="" BOLD="" REV="" RESET=""
 fi
+
+shopt -s extglob  # 供 str_width 去除 ANSI 颜色码时使用
 
 # ──────────────────────────────── 工具函数 ────────────────────────────────────
 
@@ -2249,9 +2250,10 @@ term_width() {
     printf '%d' "$w"
 }
 
-# 显示宽度：CJK/全角字符按 2 列计
+# 显示宽度：CJK/全角字符按 2 列计；先去除 ANSI 颜色码
 str_width() {
     local s="$1"
+    s="${s//$'\e'[[]*([0-9;])m/}"
     case "${LANG:-${LC_ALL:-${LC_CTYPE:-}}}" in
         *UTF-8*|*utf-8*|*UTF8*|*utf8*)
             local c n=0 i
@@ -2271,14 +2273,6 @@ pad_line() {
     pad=$((width - tw))
     (( pad < 0 )) && pad=0
     printf '%s%s' "$text" "$(repeat ' ' "$pad")"
-}
-
-center_text() {
-    local text="$1" field="$2" tw pad
-    tw=$(str_width "$text")
-    pad=$(( (field - tw) / 2 ))
-    (( pad < 0 )) && pad=0
-    printf '%s%s%s' "$(repeat ' ' "$pad")" "$text" "$(repeat ' ' $((field - tw - pad)))"
 }
 
 # 绿→黄→红渐变进度条
@@ -2312,21 +2306,6 @@ MENU_LABELS=(
     "启动或重新配置" "停止服务" "重启服务" "流量目标"
     "实时流量监控" "高级流量监控" "功能诊断" "网络测速"
     "查看服务日志" "快捷键管理" "检查脚本更新" "卸载全部服务"
-    "退出控制台"
-)
-MENU_DESCS=(
-    "选择下载源与线程数，启动后台流量消耗服务"
-    "停止 systemd 后台服务"
-    "重启 systemd 后台服务"
-    "设置流量消耗目标与自动停止"
-    "全屏实时速率与累计流量"
-    "带阈值告警、峰值与趋势图的高级监控"
-    "检测监控链路（脚本/接口/权限/命令）"
-    "4 并发下载测速与评级"
-    "查看最近 50 行服务日志"
-    "安装 / 重命名 / 删除 xh 快捷键"
-    "对比远端版本并一键更新"
-    "彻底删除服务、配置与缓存（危险）"
     "退出控制台"
 )
 MENU_COUNT=${#MENU_KEYS[@]}
@@ -2378,62 +2357,51 @@ get_current_speed() {
     printf '%s %s\n' "$rx" "$now" > "$MENU_SPEED_STATE"
 }
 
-# ── 绘制组件 ──
+# ── 绘制组件（紧凑简约版：无大边框，单行标题，菜单仅高亮选中项） ──
 
-draw_header() {
-    local width="$1" inner
-    inner=$((width-6))
-    printf '  %b╔%s╗%b\n' "$PRIMARY" "$(repeat '═' "$inner")" "$RESET"
-    printf '  %b║%b%s%b║%b\n' "$PRIMARY" "$RESET" "$(center_text '米粒儿 VPS 流量控制台' "$inner")" "$PRIMARY" "$RESET"
-    printf '  %b║%b%s%b║%b\n' "$PRIMARY" "$RESET" "$(center_text "${SCRIPT_VERSION} · ↑↓ 选择  Enter 确认  数字键直达  Q 退出" "$inner")" "$PRIMARY" "$RESET"
-    printf '  %b╚%s╝%b\n' "$PRIMARY" "$(repeat '═' "$inner")" "$RESET"
-    echo
-}
-
-box_top() {
-    local title="$1" width="$2" fill
-    fill=$((width - 9 - $(str_width "$title")))
-    (( fill < 0 )) && fill=0
-    printf '  %b┌─ %b%s%b %s%b┐%b\n' "$PRIMARY" "${WHITE}${BOLD}" "$title" "$RESET" "$(repeat '─' "$fill")" "$PRIMARY" "$RESET"
-}
-
-box_bottom() {
+thin_line() {
     local width="$1"
-    printf '  %b└%s┘%b\n' "$PRIMARY" "$(repeat '─' $((width-6)))" "$RESET"
+    printf '  %b%s%b\n' "$PANEL" "$(repeat '─' $((width-4)))" "$RESET"
 }
 
-panel_row() {
-    local label="$1" value="$2" pad
-    pad=$(repeat ' ' $((10 - $(str_width "$label"))))
-    printf '  %b│%b  %b%s%b%s%b%s%b\n' "$GRAY" "$RESET" "$LABEL" "$label" "$RESET" "$pad" "$VALUE" "$value" "$RESET"
+# 单行标题：左侧工具名，右侧版本号
+draw_header() {
+    local width="$1" inner gap
+    inner=$((width-4))
+    gap=$((inner - $(str_width '米粒儿 VPS 流量控制台') - $(str_width "$SCRIPT_VERSION")))
+    (( gap < 2 )) && gap=2
+    printf '  %b%s%b%s%b%s%b\n' "${WHITE}${BOLD}" '米粒儿 VPS 流量控制台' "$RESET" \
+        "$(repeat ' ' "$gap")" "$MUTED" "$SCRIPT_VERSION" "$RESET"
 }
 
-section_bar() {
-    local title="$1" width="$2"
-    printf '  %b%s%b\n' "$REV" "$(pad_line "◆ ${title}" $((width-4)))" "$RESET"
+# 一行两个字段：左侧内容 + 右对齐内容（支持带颜色文本）
+status_line() {
+    local left="$1" right="$2" width gap
+    width=$(term_width)
+    gap=$((width - 4 - $(str_width "$left") - $(str_width "$right")))
+    (( gap < 2 )) && gap=2
+    printf '  %s%s%s\n' "$left" "$(repeat ' ' "$gap")" "$right"
 }
 
 menu_row() {
-    local i="$1" width="$2" key label key_color
+    local i="$1" key label key_color
     key="${MENU_KEYS[$i]}"
     label="${MENU_LABELS[$i]}"
     key_color="$KEY"
     [[ "$key" == "U" ]] && key_color="$DANGER"
     [[ "$key" == "0" ]] && key_color="$GRAY"
     if [[ $i -eq $MENU_SELECTED ]]; then
-        printf '  %b%s%b\n' "$REV" "$(pad_line "▸ [${key}] ${label}" $((width-4)))" "$RESET"
+        printf '  %b▸ [%s] %s%b\n' "$REV" "$key" "$label" "$RESET"
     else
-        printf '  %b[%s]%b %b%s%b\n' "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET"
+        printf '   %b[%s]%b %b%s%b\n' "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET"
     fi
 }
 
 draw_footer() {
     local width="$1"
-    printf '  %b%s%b\n' "$PANEL" "$(repeat '─' $((width-4)))" "$RESET"
+    thin_line "$width"
+    printf '  %b↑↓ 选择 · Enter 确认 · 数字直达 · Q 退出%b\n' "$MUTED" "$RESET"
     printf '  %b%s%b  %b%s%b\n' "$MUTED" "$TG_GROUP_NAME" "$RESET" "$PRIMARY" "$TG_GROUP_URL" "$RESET"
-    printf '  %b↑/↓ 选择%s  %bEnter 确认%s  %b数字键直达%s  %bQ 退出%s\n' \
-        "$MUTED" "$RESET" "$MUTED" "$RESET" "$MUTED" "$RESET" "$MUTED" "$RESET"
-    printf '  %b▸ %s%b %b%s%b\n' "$PRIMARY" "${MENU_LABELS[$MENU_SELECTED]}" "$RESET" "$MUTED" "${MENU_DESCS[$MENU_SELECTED]}" "$RESET"
     echo
 }
 
@@ -2457,59 +2425,36 @@ render_main_menu() {
     local target_summary
     get_target_summary target_summary
 
-    local host_name cpu_cores mem_used mem_total disk_usage load_avg interfaces_count
+    local host_name cpu_cores mem_used mem_total disk_usage
     host_name=$(hostname 2>/dev/null || echo "未知")
     cpu_cores=$(nproc 2>/dev/null || echo "?")
     mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.1f", $3/1024}' || echo "?")
     mem_total=$(awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "?")
     disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}' || echo "未知")
-    load_avg=$(awk '{print $1", "$2", "$3}' /proc/loadavg 2>/dev/null || echo "未知")
-    interfaces_count=$(list_network_interfaces | awk 'END {print NR+0}')
-    interfaces_count="${interfaces_count:-0}"
-
-    load_config || true
-    local last_config="${MUTED}暂无历史配置${RESET}"
-    if [[ -n "$LAST_URL" ]]; then
-        local short_url="$LAST_URL"
-        [[ ${#short_url} -gt 42 ]] && short_url="${short_url:0:39}..."
-        last_config="${VALUE}${LAST_THREADS:-?} 线程 · ${LAST_INTERFACE:-未知} · ${short_url}${RESET}"
-    fi
 
     get_current_speed
     local speed_text="--"
-    local speed_iface
+    local speed_iface speed_part
     speed_iface=$(list_network_interfaces | head -1)
     [[ -n "$CURRENT_SPEED" ]] && speed_text="${CURRENT_SPEED} MB/s"
+    speed_part="${SUCCESS}↓${RESET} ${VALUE}${speed_text}${RESET}${MUTED} · ${speed_iface:-无接口}${RESET}"
 
-    # 绘制
+    # 紧凑布局：单行标题 + 3 行状态 + 13 项菜单 + 底部提示（约 22 行）
     printf '\033[H'
     draw_header "$width"
+    thin_line "$width"
 
-    box_top "系统概览" "$width"
-    panel_row "服务状态" "${status_badge} ${MUTED}· PID ${pid_value}${RESET}"
-    panel_row "当前速率" "${VALUE}${speed_text}${RESET}${MUTED} · ${speed_iface:-无接口}${RESET}"
-    panel_row "流量目标" "$target_summary"
-    [[ -n "$TARGET_PERCENT" ]] && panel_row "" "$(gradient_bar "$TARGET_PERCENT" $((width - 42))) ${VALUE}${TARGET_PERCENT}%${RESET}"
-    panel_row "主机信息" "${VALUE}${host_name}${RESET}"
-    panel_row "资源占用" "${VALUE}CPU ${cpu_cores} 核 · 内存 ${mem_used}/${mem_total} GB${RESET}"
-    panel_row "存储网络" "${VALUE}${disk_usage} · ${interfaces_count} 个接口 · 负载 ${load_avg}${RESET}"
-    panel_row "上次配置" "$last_config"
-    if [[ "$USAGE_COUNT" =~ ^[0-9]+$ ]] && [[ $USAGE_COUNT -gt 0 ]]; then
-        panel_row "使用记录" "${VALUE}${USAGE_COUNT} 次${RESET} ${MUTED}· ${LAST_USED:-未知}${RESET}"
-    fi
-    box_bottom "$width"
-    echo
+    status_line "${status_badge} ${MUTED}· PID ${pid_value}${RESET}" "$speed_part"
+    status_line "🎯 ${target_summary}" "$([[ -n "$TARGET_PERCENT" ]] && gradient_bar "$TARGET_PERCENT" 14)"
+    status_line "${VALUE}${host_name}${RESET}${MUTED} · CPU ${cpu_cores} 核 · 内存 ${mem_used}/${mem_total} GB · 磁盘 ${disk_usage}${RESET}" ""
 
-    section_bar "服务管理" "$width"
-    menu_row 0 "$width"; menu_row 1 "$width"; menu_row 2 "$width"; menu_row 3 "$width"
-    echo
-    section_bar "监控工具" "$width"
-    menu_row 4 "$width"; menu_row 5 "$width"; menu_row 6 "$width"; menu_row 7 "$width"
-    echo
-    section_bar "系统维护" "$width"
-    menu_row 8 "$width"; menu_row 9 "$width"; menu_row 10 "$width"; menu_row 11 "$width"
-    echo
-    menu_row 12 "$width"
+    thin_line "$width"
+
+    local i
+    for ((i=0; i<MENU_COUNT; i++)); do
+        menu_row "$i"
+    done
+
     draw_footer "$width"
     printf '\033[J'
 }
