@@ -6,7 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-SCRIPT_VERSION="v3.3.2"
+SCRIPT_VERSION="v3.3.3"
 SCRIPT_NAME="milier_flow.sh"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
@@ -2250,10 +2250,11 @@ term_width() {
     printf '%d' "$w"
 }
 
-# 显示宽度：CJK/全角字符按 2 列计；先去除 ANSI 颜色码
+# 显示宽度：CJK/全角字符按 2 列计；先去除 ANSI 颜色码（真实 ESC 序列与字面 \e 写法）
 str_width() {
     local s="$1"
     s="${s//$'\e'[[]*([0-9;])m/}"
+    s="${s//\\e[[]*([0-9;])m/}"
     case "${LANG:-${LC_ALL:-${LC_CTYPE:-}}}" in
         *UTF-8*|*utf-8*|*UTF8*|*utf8*)
             local c n=0 i
@@ -2374,13 +2375,17 @@ draw_header() {
         "$(repeat ' ' "$gap")" "$MUTED" "$SCRIPT_VERSION" "$RESET"
 }
 
-# 一行两个字段：左侧内容 + 右对齐内容（支持带颜色文本）
+# 一行两个字段：左侧内容 + 右对齐内容（%b 渲染颜色，右侧为空时不补空格）
 status_line() {
     local left="$1" right="$2" width gap
+    if [[ -z "$right" ]]; then
+        printf '  %b\n' "$left"
+        return 0
+    fi
     width=$(term_width)
     gap=$((width - 4 - $(str_width "$left") - $(str_width "$right")))
     (( gap < 2 )) && gap=2
-    printf '  %s%s%s\n' "$left" "$(repeat ' ' "$gap")" "$right"
+    printf '  %b%s%b\n' "$left" "$(repeat ' ' "$gap")" "$right"
 }
 
 menu_row() {
