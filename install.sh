@@ -62,9 +62,9 @@ update_package_manager() {
             ;;
         centos|rhel|fedora|rocky|almalinux)
             if command -v yum &>/dev/null; then
-                yum update -y &>/dev/null || warning_msg "包管理器更新失败，继续安装..."
+                yum makecache fast &>/dev/null || warning_msg "包管理器更新失败，继续安装..."
             elif command -v dnf &>/dev/null; then
-                dnf update -y &>/dev/null || warning_msg "包管理器更新失败，继续安装..."
+                dnf makecache &>/dev/null || warning_msg "包管理器更新失败，继续安装..."
             fi
             ;;
         arch|manjaro)
@@ -86,7 +86,7 @@ install_dependencies() {
     info_msg "正在安装必要依赖..."
     
     local packages_to_install=()
-    local required_commands=("curl" "wget" "systemctl" "nproc" "free" "df" "ps" "grep" "awk" "sed" "bc")
+    local required_commands=("curl" "wget" "systemctl" "nproc" "free" "df" "ps" "grep" "awk" "sed")
     
     # 检查缺失的命令
     for cmd in "${required_commands[@]}"; do
@@ -96,8 +96,9 @@ install_dependencies() {
                 "wget") packages_to_install+=("wget") ;;
                 "systemctl") packages_to_install+=("systemd") ;;
                 "nproc"|"free"|"df"|"ps") packages_to_install+=("procps") ;;
-                "grep"|"awk"|"sed") packages_to_install+=("coreutils") ;;
-                "bc") packages_to_install+=("bc") ;;
+                "grep") packages_to_install+=("grep") ;;
+                "awk") packages_to_install+=("gawk") ;;
+                "sed") packages_to_install+=("sed") ;;
             esac
         fi
     done
@@ -185,25 +186,43 @@ check_environment() {
 download_script() {
     info_msg "正在下载米粒儿主脚本..."
 
-    local temp_file download_url request_url separator
+    local temp_file headers_file download_url request_url separator
     temp_file=$(mktemp) || error_exit "创建临时文件失败"
+    headers_file=$(mktemp) || { rm -f "$temp_file"; error_exit "创建临时文件失败"; }
     mkdir -p "$INSTALL_DIR"
 
-    # 主地址异常时自动切换到 GitHub，下载完成后先做语法检查再替换。
+    # 主地址异常时自动切换到 GitHub，下载完成后先做完整性校验与语法检查再替换。
     for download_url in "$SCRIPT_URL" "$SCRIPT_FALLBACK_URL"; do
         separator="?"
         [[ "$download_url" == *"?"* ]] && separator="&"
         request_url="${download_url}${separator}t=$(date +%s)"
-        if curl -fsSL -H "Cache-Control: no-cache" --retry 3 --connect-timeout 10 --max-time 90 "$request_url" -o "$temp_file" \
-            && bash -n "$temp_file" 2>/dev/null \
+
+        # 每次尝试都覆盖写响应头到临时文件，供下方 X-SHA256 校验使用
+        if ! curl -fsSL -H "Cache-Control: no-cache" --retry 3 --connect-timeout 10 --max-time 90 \
+            -D "$headers_file" -o "$temp_file" "$request_url"; then
+            continue
+        fi
+
+        # 若响应头存在 X-SHA256 且系统有 sha256sum，则校验下载文件完整性；不一致视为本次尝试失败
+        local expected_sha actual_sha
+        expected_sha=$(awk -F': ' 'tolower($1)=="x-sha256" {print $2; exit}' "$headers_file" | tr -d '\r' | tr '[:upper:]' '[:lower:]')
+        if [[ -n "$expected_sha" ]] && command -v sha256sum &>/dev/null; then
+            actual_sha=$(sha256sum "$temp_file" | awk '{print $1}')
+            if [[ "$actual_sha" != "$expected_sha" ]]; then
+                warning_msg "下载文件完整性校验失败，尝试备用源..."
+                continue
+            fi
+        fi
+
+        if bash -n "$temp_file" 2>/dev/null \
             && install -m 755 "$temp_file" "$INSTALL_DIR/$SCRIPT_NAME"; then
-            rm -f "$temp_file"
+            rm -f "$temp_file" "$headers_file"
             success_msg "脚本下载成功"
             return 0
         fi
     done
 
-    rm -f "$temp_file"
+    rm -f "$temp_file" "$headers_file"
     error_exit "脚本下载或语法校验失败，请检查网络连接"
 }
 
@@ -257,7 +276,7 @@ debian13_optimization() {
         fi
         
         # 安装额外的兼容性包
-        apt-get install -y procps-ng net-tools iproute2 &>/dev/null || warning_msg "部分兼容性包安装失败，但不影响主要功能"
+        apt-get install -y procps net-tools iproute2 &>/dev/null || warning_msg "部分兼容性包安装失败，但不影响主要功能"
         
         # 检查并修复可能的权限问题
         if [[ -d "/sys/class/net" ]]; then

@@ -6,7 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-SCRIPT_VERSION="v3.2.1"
+SCRIPT_VERSION="v3.3.0"
 SCRIPT_NAME="milier_flow.sh"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
@@ -35,12 +35,13 @@ LABEL="\e[37m"            # 标准白：字段标签
 VALUE="\e[97m"            # 高亮白：字段值
 KEY="\e[96m"              # 高亮青：操作键
 BOLD="\e[1m"              # 加粗
+REV="\e[7m"               # 反色（菜单选中项高亮）
 RESET="\e[0m"             # 重置
 
 # 非交互输出、NO_COLOR 或简易终端下关闭颜色控制码。
 if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
     PRIMARY="" SUCCESS="" WARNING="" DANGER="" INFO=""
-    WHITE="" GRAY="" MUTED="" PANEL="" LABEL="" VALUE="" KEY="" BOLD="" RESET=""
+    WHITE="" GRAY="" MUTED="" PANEL="" LABEL="" VALUE="" KEY="" BOLD="" REV="" RESET=""
 fi
 
 # ──────────────────────────────── 工具函数 ────────────────────────────────────
@@ -48,7 +49,8 @@ fi
 # 错误处理函数
 error_exit() {
     echo -e "${DANGER}❌ 错误：$1${RESET}" >&2
-    read -r -p "按回车返回菜单..."
+    # 非交互输入时避免 read 挂起
+    [[ -t 0 ]] && read -r -p "按回车返回菜单..."
 }
 
 # 检查命令执行结果
@@ -99,32 +101,6 @@ safe_source_config() {
         value="${BASH_REMATCH[2]}"
         if [[ "$allowed" != *" $key "* ]] || ! is_safe_config_value "$value"; then
             echo -e "${WARNING}⚠️  配置文件包含不允许的内容，已跳过：$file${RESET}" >&2
-            return 1
-        fi
-    done < "$file"
-
-    # shellcheck disable=SC1090
-    source "$file"
-}
-
-safe_source_preset_config() {
-    local file="$1"
-    [[ -f "$file" ]] || return 1
-
-    local line key value
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-
-        if [[ ! "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=\"([^\"]*)\"[[:space:]]*$ ]]; then
-            echo -e "${WARNING}⚠️  预设配置格式异常，已跳过：$file${RESET}" >&2
-            return 1
-        fi
-
-        key="${BASH_REMATCH[1]}"
-        value="${BASH_REMATCH[2]}"
-        if [[ ! "$key" =~ ^PRESET_[A-Za-z][A-Za-z0-9_]*_(URL|THREADS|REFRESH|DL_THRESHOLD|UL_THRESHOLD)$ ]] || ! is_safe_config_value "$value"; then
-            echo -e "${WARNING}⚠️  预设配置包含不允许的内容，已跳过：$file${RESET}" >&2
             return 1
         fi
     done < "$file"
@@ -199,6 +175,9 @@ save_target_config() {
     [[ "$auto_stop" == "true" || "$auto_stop" == "false" ]] || auto_stop="false"
     [[ "$prev_consumed" =~ ^[0-9]+$ ]] || prev_consumed=0
 
+    # 先写临时文件再原子替换，避免与后台检查线程并发写坏配置
+    rm -f "${TARGET_CONFIG_FILE}".tmp.*
+    local tmp_file="${TARGET_CONFIG_FILE}.tmp.$$"
     {
         echo "# 流量目标配置"
         write_config_line "TARGET_GB" "$target_gb" || return 1
@@ -207,7 +186,8 @@ save_target_config() {
         write_config_line "TARGET_SET_TIME" "$(date '+%Y-%m-%d %H:%M:%S')" || return 1
         write_config_line "TARGET_AUTO_STOP" "$auto_stop" || return 1
         write_config_line "TARGET_PREV_CONSUMED" "$prev_consumed" || return 1
-    } > "$TARGET_CONFIG_FILE"
+    } > "$tmp_file" || { rm -f "$tmp_file"; return 1; }
+    mv -f "$tmp_file" "$TARGET_CONFIG_FILE"
     chmod 600 "$TARGET_CONFIG_FILE" 2>/dev/null
 }
 
@@ -287,7 +267,7 @@ validate_threads() {
     return 0
 }
 
-# 保存配置
+# 保存配置（USAGE_COUNT 由主入口累加，这里原样保留；INSTALL_TIME 保持不变）
 save_config() {
     local url="$1" threads="$2" interface="$3"
     validate_url "$url" || {
@@ -297,8 +277,9 @@ save_config() {
     [[ "$threads" =~ ^[1-9][0-9]*$ ]] || return 1
     validate_interface_name "$interface" || return 1
 
-    local usage_count="${USAGE_COUNT:-0}"
+    local usage_count="${USAGE_COUNT:-0}" install_time
     [[ "$usage_count" =~ ^[0-9]+$ ]] || usage_count=0
+    install_time="${INSTALL_TIME:-$(date '+%Y-%m-%d %H:%M:%S')}"
 
     {
         echo "# ═══════════════════════════════════════════════════════════════════"
@@ -307,56 +288,15 @@ save_config() {
         write_config_line "LAST_URL" "$url" || return 1
         write_config_line "LAST_THREADS" "$threads" || return 1
         write_config_line "LAST_INTERFACE" "$interface" || return 1
-        write_config_line "INSTALL_TIME" "$(date '+%Y-%m-%d %H:%M:%S')" || return 1
-        write_config_line "USAGE_COUNT" "$((usage_count + 1))" || return 1
+        write_config_line "INSTALL_TIME" "$install_time" || return 1
+        write_config_line "USAGE_COUNT" "$usage_count" || return 1
         write_config_line "LAST_USED" "$(date '+%Y-%m-%d %H:%M:%S')" || return 1
         echo "# ═══════════════════════════════════════════════════════════════════"
     } > "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE" 2>/dev/null
 }
 
-# 保存高级配置
-save_advanced_config() {
-    local preset_name="$1" url="$2" threads="$3" refresh_rate="$4" dl_threshold="$5" ul_threshold="$6"
-    local preset_file="$PRESET_CONFIG_FILE"
-
-    [[ "$preset_name" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || return 1
-    validate_url "$url" || return 1
-    [[ "$threads" =~ ^[1-9][0-9]*$ ]] || return 1
-    [[ "$refresh_rate" =~ ^([1-9]|10)$ ]] || return 1
-    [[ "$dl_threshold" =~ ^[0-9]+$ ]] || return 1
-    [[ "$ul_threshold" =~ ^[0-9]+$ ]] || return 1
-
-    {
-        echo "# 预设：$preset_name - $(date '+%Y-%m-%d %H:%M:%S')"
-        write_config_line "PRESET_${preset_name}_URL" "$url" || return 1
-        write_config_line "PRESET_${preset_name}_THREADS" "$threads" || return 1
-        write_config_line "PRESET_${preset_name}_REFRESH" "$refresh_rate" || return 1
-        write_config_line "PRESET_${preset_name}_DL_THRESHOLD" "$dl_threshold" || return 1
-        write_config_line "PRESET_${preset_name}_UL_THRESHOLD" "$ul_threshold" || return 1
-        echo
-    } >> "$preset_file"
-    chmod 600 "$preset_file" 2>/dev/null
-}
-
-# 加载预设配置
-load_preset() {
-    local preset_name="$1"
-    local preset_file="$PRESET_CONFIG_FILE"
-
-    [[ "$preset_name" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || return 1
-    if [[ -f "$preset_file" ]]; then
-        safe_source_preset_config "$preset_file" || return 1
-
-        local url_var="PRESET_${preset_name}_URL"
-        local threads_var="PRESET_${preset_name}_THREADS"
-        local refresh_var="PRESET_${preset_name}_REFRESH"
-        local dl_var="PRESET_${preset_name}_DL_THRESHOLD"
-        local ul_var="PRESET_${preset_name}_UL_THRESHOLD"
-
-        echo "${!url_var:-}" "${!threads_var:-}" "${!refresh_var:-}" "${!dl_var:-}" "${!ul_var:-}"
-    fi
-}
+# （v3.3 已移除未使用的预设保存/加载函数，URL 预设直接内置在启动菜单中）
 
 # 读取配置
 load_config() {
@@ -413,46 +353,9 @@ remove_shortcut() {
 }
 
 # ──────────────────────────────── 初始化服务 ──────────────────────────────────
-init_service() {
-    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]] && [[ -f "/root/milier_start.sh" ]]; then
-        return 0
-    fi
-
-    echo -e "${WARNING}⚠️  正在初始化米粒儿服务...${RESET}"
-
-    # 检查系统权限
-    if [[ $EUID -ne 0 ]]; then
-        error_exit "需要 root 权限运行此脚本"
-        return 1
-    fi
-
-    # 创建必要目录和文件
-    mkdir -p /root
-    touch "$LOG_FILE" && chmod 644 "$LOG_FILE"
-    check_command "创建文件失败" || return 1
-
-    # 网络接口检测
-    local interface
-    interface=$(detect_network_interface)
-    [[ $? -ne 0 ]] && return 1
-
-    # 默认配置
-    local cpu_cores default_threads default_url
-    cpu_cores=$(nproc)
-    default_threads=$((cpu_cores * 2))
-    default_url="https://speed.cloudflare.com/__down?bytes=104857600"
-
-    # 创建启动脚本 /root/milier_start.sh
-    cat > "/root/milier_start.sh" << 'STARTEOF'
-#!/bin/bash
-# 米粒儿流量消耗后台启动脚本
-URL="$MILIER_URL"
-THREADS="$MILIER_THREADS"
-LOG_FILE="/root/milier_flow.log"
-TARGET_FILE="/root/milier_target.conf"
-
-[[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || THREADS=1
-
+# 输出嵌入到生成脚本（milier_start.sh / milier_target_check.sh / 监控脚本）中的公共安全函数库
+emit_common_library() {
+    cat << 'LIBEOF'
 is_safe_config_value() {
   local value="$1"
   [[ "$value" != *$'\n'* ]] || return 1
@@ -464,7 +367,8 @@ is_safe_config_value() {
 }
 
 safe_source_target_config() {
-  [[ -f "$TARGET_FILE" ]] || return 1
+  local file="/root/milier_target.conf"
+  [[ -f "$file" ]] || return 1
   local allowed=" TARGET_GB TARGET_START_RX TARGET_INTERFACE TARGET_SET_TIME TARGET_AUTO_STOP TARGET_PREV_CONSUMED "
   local line key value
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -475,12 +379,29 @@ safe_source_target_config() {
     value="${BASH_REMATCH[2]}"
     [[ "$allowed" == *" $key "* ]] || return 1
     is_safe_config_value "$value" || return 1
-  done < "$TARGET_FILE"
-  source "$TARGET_FILE"
+  done < "$file"
+  source "$file"
+}
+LIBEOF
 }
 
+# 创建后台启动脚本 /root/milier_start.sh
+create_start_script() {
+    {
+        echo '#!/bin/bash'
+        emit_common_library
+        cat << 'STARTEOF'
+# 米粒儿流量消耗后台启动脚本
+URL="$MILIER_URL"
+THREADS="$MILIER_THREADS"
+LOG_FILE="/root/milier_flow.log"
+TARGET_FILE="/root/milier_target.conf"
+
+[[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || THREADS=1
+
 write_target_runtime_config() {
-  cat > "$TARGET_FILE" << EOF
+  local tmp_file="${TARGET_FILE}.tmp.$$"
+  cat > "$tmp_file" << EOF
 # 流量目标配置
 TARGET_GB="$TARGET_GB"
 TARGET_START_RX="$TARGET_START_RX"
@@ -489,6 +410,7 @@ TARGET_SET_TIME="${TARGET_SET_TIME:-未知}"
 TARGET_AUTO_STOP="${TARGET_AUTO_STOP:-true}"
 TARGET_PREV_CONSUMED="${TARGET_PREV_CONSUMED:-0}"
 EOF
+  mv -f "$tmp_file" "$TARGET_FILE" 2>/dev/null
   chmod 600 "$TARGET_FILE" 2>/dev/null
 }
 
@@ -519,7 +441,7 @@ if [[ -f "$TARGET_FILE" ]]; then
         fi
 
         CONSUMED=$((CURRENT_RX - START_RX + PREV_CONSUMED))
-        TARGET_BYTES=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null || echo 0)
+        TARGET_BYTES=$(awk -v gb="$TARGET_GB" 'BEGIN { printf "%.0f", gb * 1073741824 }' 2>/dev/null || echo 0)
         TARGET_BYTES="${TARGET_BYTES%.*}"
         [[ "$TARGET_BYTES" =~ ^[0-9]+$ && "$TARGET_BYTES" -gt 0 ]] || { sleep 5; continue; }
 
@@ -536,14 +458,29 @@ fi
 
 # 2. 启动下载并发线程
 for ((i=1;i<=THREADS;i++)); do
-  bash -c 'while true; do curl -A "MilierFlow" -s -m 30 --connect-timeout 10 -o /dev/null "$1"; sleep 0.1; done' milier_thread "$URL" &
+  bash -c 'while true; do
+    if curl -A "MilierFlow" -s -m 30 --connect-timeout 10 --retry 2 --retry-delay 1 -o /dev/null "$1"; then
+      sleep 0.1
+    else
+      sleep 2
+    fi
+  done' milier_thread "$URL" &
 done
 
 wait
 STARTEOF
-    chmod +x "/root/milier_start.sh"
+    } > /root/milier_start.sh
+    chmod +x /root/milier_start.sh
+}
 
-    # 创建 systemd 服务
+# 创建 systemd 服务单元；优先沿用已保存的 URL/线程数
+create_service_file() {
+    local url="$1" threads="$2"
+    if load_config 2>/dev/null; then
+        [[ -n "$LAST_URL" ]] && validate_url "$LAST_URL" && url="$LAST_URL"
+        [[ "$LAST_THREADS" =~ ^[1-9][0-9]*$ ]] && threads="$LAST_THREADS"
+    fi
+
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
 Description=米粒儿 VPS 流量消耗后台服务
@@ -554,8 +491,8 @@ StartLimitIntervalSec=60
 [Service]
 Type=simple
 WorkingDirectory=/root
-Environment="MILIER_URL=$default_url"
-Environment="MILIER_THREADS=$default_threads"
+Environment="MILIER_URL=$url"
+Environment="MILIER_THREADS=$threads"
 ExecStart=/bin/bash /root/milier_start.sh
 ExecStop=/usr/bin/pkill -f milier_thread
 ExecStopPost=/bin/bash -c 'pkill -f milier_check; pkill -f "curl -A MilierFlow"; echo "\$(date "+%%Y-%%m-%%d %%H:%%M:%%S"): [停止] 服务已停止" >> $LOG_FILE'
@@ -568,10 +505,14 @@ EOF
 
     systemctl daemon-reload
     check_command "系统配置失败" || return 1
+}
 
-    # 创建增强的监控脚本
-    cat > "$MONITOR_SCRIPT" << 'EOF'
-#!/bin/bash
+# 创建增强的监控脚本
+create_monitor_script() {
+    {
+        echo '#!/bin/bash'
+        emit_common_library
+        cat << 'MONITOREOF'
 # 米粒儿VPS流量监控脚本 - 增强版
 INTERFACE=$1
 
@@ -614,8 +555,14 @@ echo -e "\e[32m✅ 接口检查通过\e[0m"
 # 统一颜色方案
 PRIMARY="\e[36m"; SUCCESS="\e[32m"; WARNING="\e[33m"
 INFO="\e[36m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
-DANGER="\e[31m"; ACCENT="\e[35m"
+DANGER="\e[31m"; ACCENT="\e[35m"; GRAY="\e[37m"
 BAR_LEN=50
+
+# 非交互输出、NO_COLOR 或简易终端下关闭颜色控制码
+if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
+    PRIMARY=""; SUCCESS=""; WARNING=""; INFO=""; WHITE=""; BOLD=""; RESET=""
+    DANGER=""; ACCENT=""; GRAY=""
+fi
 
 # 检查必要命令
 check_commands() {
@@ -715,24 +662,7 @@ safe_read_bytes() {
     fi
 }
 
-safe_source_target_config() {
-    local file="/root/milier_target.conf"
-    [[ -f "$file" ]] || return 1
-    local allowed=" TARGET_GB TARGET_START_RX TARGET_INTERFACE TARGET_SET_TIME TARGET_AUTO_STOP TARGET_PREV_CONSUMED "
-    local line key value
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=\"([^\"]*)\"[[:space:]]*$ ]] || return 1
-        key="${BASH_REMATCH[1]}"
-        value="${BASH_REMATCH[2]}"
-        [[ "$allowed" == *" $key "* ]] || return 1
-        [[ "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *'"'* && "$value" != *'`'* && "$value" != *'$'* && "$value" != *\\* ]] || return 1
-    done < "$file"
-    source "$file"
-}
-
-# 显示流量目标进度
+# 显示流量目标进度（safe_source_target_config 由公共函数库提供）
 show_target_progress() {
     if safe_source_target_config; then
         if [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
@@ -749,7 +679,7 @@ show_target_progress() {
 
             local consumed=$((current_rx >= start_rx ? current_rx - start_rx + prev_consumed : prev_consumed))
             local consumed_gb=$(awk "BEGIN{printf \"%.2f\", $consumed/1073741824}" 2>/dev/null || echo "$((consumed/1073741824))")
-            local target_bytes=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null | cut -d. -f1)
+            local target_bytes=$(awk -v gb="$TARGET_GB" 'BEGIN { printf "%.0f", gb * 1073741824 }' 2>/dev/null)
             [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
             local percent=$(( target_bytes > 0 ? consumed * 100 / target_bytes : 0 ))
             [[ $percent -gt 100 ]] && percent=100
@@ -794,7 +724,7 @@ echo -e "${INFO}准备启动监控界面...${RESET}"
 sleep 1
 
 # 设置信号处理
-trap 'printf "\033[2J\033[H"; echo -e "${WARNING}监控已停止${RESET}"; echo; exit 0' INT TERM
+trap 'printf "\033[H\033[J"; echo -e "${WARNING}监控已停止${RESET}"; echo; exit 0' INT TERM
 
 # 主监控循环
 RX_PEAK=0; TX_PEAK=0
@@ -806,7 +736,7 @@ while true; do
     # 定期检查接口是否仍然存在
     if [[ $((DURATION % 30)) -eq 0 ]]; then
         if [[ ! -d "/sys/class/net/$INTERFACE" ]]; then
-            printf "\033[2J\033[H"
+            printf "\033[H\033[J"
             echo -e "${DANGER}网络接口 $INTERFACE 已不存在${RESET}"
             break
         fi
@@ -855,7 +785,7 @@ while true; do
     AVG_TX=$(( DURATION > 0 ? TX_TOTAL / DURATION : 0 ))
 
     # === 全屏刷新显示 ===
-    printf "\033[2J\033[H"
+    printf "\033[H\033[J"
 
     echo -e "  ${PRIMARY}${BOLD}═══════════════════════════════════════════════════════════${RESET}"
     echo -e "  ${WHITE}${BOLD}              实时流量监控${RESET}  ${INFO}接口: ${WHITE}$INTERFACE${RESET}"
@@ -889,14 +819,22 @@ while true; do
     show_target_progress
 
     echo -e "  ${GRAY}───────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${GRAY}Ctrl+C 退出监控${RESET}"
+    echo -e "  ${GRAY}按 Q / ESC / Ctrl+C 退出监控${RESET}"
+
+    # 支持按键退出监控
+    if read -rsn1 -t 0.1 key 2>/dev/null; then
+        [[ "$key" == "q" || "$key" == "Q" || "$key" == $'\e' ]] && break
+    fi
 done
 
 echo -e "\n${INFO}监控循环结束${RESET}"
-EOF
+MONITOREOF
+    } > "$MONITOR_SCRIPT"
     chmod +x "$MONITOR_SCRIPT"
+}
 
-    # 创建卸载脚本
+# 创建卸载脚本
+create_uninstall_script() {
     cat > "$UNINSTALL_SCRIPT" << EOF
 #!/bin/bash
 SUCCESS="\e[32m"; WARNING="\e[33m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
@@ -917,50 +855,157 @@ pkill -f milier_thread 2>/dev/null
 pkill -f milier_check 2>/dev/null
 pkill -f "curl -A MilierFlow" 2>/dev/null
 crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
-rm -f "$MONITOR_SCRIPT" "$UNINSTALL_SCRIPT" "$LOG_FILE" "$CONFIG_FILE" "$SHORTCUT_CONFIG" "$TARGET_CONFIG_FILE" "$PRESET_CONFIG_FILE" "/root/milier_start.sh" "/root/milier_target_check.sh" "/root/$SCRIPT_NAME"
+rm -f "$MONITOR_SCRIPT" "$UNINSTALL_SCRIPT" "$LOG_FILE" "$CONFIG_FILE" "$SHORTCUT_CONFIG" "$TARGET_CONFIG_FILE" "$PRESET_CONFIG_FILE" "/root/milier_start.sh" "/root/milier_target_check.sh" "/root/$SCRIPT_NAME" "/root/milier_monitor_data.log" /tmp/milier_latest_check.* /tmp/milier_* 2>/dev/null
 echo -e "\${SUCCESS}✅ 卸载完成\${RESET}"
 EOF
     chmod +x "$UNINSTALL_SCRIPT"
+}
 
-    # 创建快捷键和保存配置
-    save_config "$default_url" "$default_threads" "$interface"
-    create_shortcut "$DEFAULT_SHORTCUT"
+init_service() {
+    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]] && [[ -f "/root/milier_start.sh" ]] \
+        && [[ -f "$MONITOR_SCRIPT" ]] && [[ -f "$UNINSTALL_SCRIPT" ]]; then
+        return 0
+    fi
+
+    echo -e "${WARNING}⚠️  正在初始化米粒儿服务...${RESET}"
+
+    # 检查系统权限
+    if [[ $EUID -ne 0 ]]; then
+        error_exit "需要 root 权限运行此脚本"
+        return 1
+    fi
+
+    # 创建必要目录和文件
+    mkdir -p /root
+    touch "$LOG_FILE" && chmod 644 "$LOG_FILE"
+    check_command "创建文件失败" || return 1
+
+    # 网络接口检测与默认配置
+    local interface cpu_cores default_threads default_url
+    interface=$(detect_network_interface)
+    [[ $? -ne 0 ]] && return 1
+    cpu_cores=$(nproc)
+    default_threads=$((cpu_cores * 2))
+    default_url="https://speed.cloudflare.com/__down?bytes=104857600"
+
+    # 只补建缺失的部分，避免覆盖用户已有配置
+    [[ -f "/root/milier_start.sh" ]] || create_start_script
+    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]]; then
+        systemctl daemon-reload 2>/dev/null
+    else
+        create_service_file "$default_url" "$default_threads"
+    fi
+    [[ -f "$MONITOR_SCRIPT" ]] || create_monitor_script
+    [[ -f "$UNINSTALL_SCRIPT" ]] || create_uninstall_script
+
+    # 仅首次安装时写入默认配置与快捷键
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        save_config "$default_url" "$default_threads" "$interface"
+    fi
+    if [[ ! -f "$SHORTCUT_CONFIG" ]]; then
+        create_shortcut "$DEFAULT_SHORTCUT"
+    fi
 
     echo -e "${SUCCESS}✅ 初始化完成${RESET}"
 }
 
 # ──────────────────────────────── 服务管理函数 ──────────────────────────────────
 
+# 交互式 URL 选择菜单：方向键 + 回车 + 数字键直达，返回选项编号（Q 返回 0）
+select_url_choice() {
+    # 非交互终端：退回传统数字输入，避免 read -rsn1 失败导致死循环
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        echo -e "  请选择下载URL："
+        url_row 1 "香港 Datapacket 100MB" "推荐，低延迟" ""
+        url_row 2 "日本东京 Datapacket 100MB" "亚洲优选" ""
+        url_row 3 "新加坡 OVH 1GB" "大文件模式" ""
+        url_row 4 "德国 Hetzner 1GB" "欧洲高速" ""
+        url_row 5 "美西 洛杉矶 Datapacket 1GB" "北美" ""
+        url_row 6 "法国 OVH 10GB" "超大文件" ""
+        [[ -n "$LAST_URL" ]] && url_row 7 "上次使用" "$LAST_URL" ""
+        url_row 8 "自定义URL" "手动输入任意下载链接" ""
+        local plain_choice
+        if ! read -r -p "  请选择 [1]: " plain_choice; then
+            echo
+            printf '%s\n' "1"
+            return 0
+        fi
+        plain_choice=${plain_choice:-1}
+        [[ "$plain_choice" =~ ^[1-8]$ ]] || plain_choice=1
+        [[ "$plain_choice" == "7" && -z "$LAST_URL" ]] && plain_choice=1
+        printf '%s\n' "$plain_choice"
+        return 0
+    fi
+
+    local -a keys=(1 2 3 4 5 6)
+    [[ -n "$LAST_URL" ]] && keys+=(7)
+    keys+=(8)
+    local count=${#keys[@]} sel=0 k i cur
+    while true; do
+        clear
+        echo -e "${PRIMARY}  ⚡ 配置流量消耗参数${RESET}"
+        echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
+        echo
+        echo -e "${INFO}  请选择下载URL：${RESET}"
+        echo
+        echo -e "    ${GRAY}── 亚洲节点 ──${RESET}"
+        cur="${keys[$sel]}"
+        url_row 1 "香港 Datapacket 100MB" "推荐，低延迟" "$cur"
+        url_row 2 "日本东京 Datapacket 100MB" "亚洲优选" "$cur"
+        url_row 3 "新加坡 OVH 1GB" "大文件模式" "$cur"
+        echo
+        echo -e "    ${GRAY}── 欧美节点 ──${RESET}"
+        url_row 4 "德国 Hetzner 1GB" "欧洲高速" "$cur"
+        url_row 5 "美西 洛杉矶 Datapacket 1GB" "北美" "$cur"
+        url_row 6 "法国 OVH 10GB" "超大文件" "$cur"
+        echo
+        echo -e "    ${GRAY}── 其他 ──${RESET}"
+        [[ -n "$LAST_URL" ]] && url_row 7 "上次使用" "$LAST_URL" "$cur"
+        url_row 8 "自定义URL" "手动输入任意下载链接" "$cur"
+        echo
+        printf '    %b↑/↓ 选择%s  %bEnter 确认%s  %b数字键直达%s  %bQ 返回%s\n' \
+            "$GRAY" "$RESET" "$GRAY" "$RESET" "$GRAY" "$RESET" "$GRAY" "$RESET"
+        k=$(menu_read_key)
+        case "$k" in
+            TIMEOUT) continue ;;
+            UP)      sel=$(( (sel - 1 + count) % count )) ;;
+            DOWN)    sel=$(( (sel + 1) % count )) ;;
+            ENTER)   printf '%s\n' "${keys[$sel]}"; return 0 ;;
+            ESC)     : ;;
+            *)
+                [[ "${k^^}" == "Q" ]] && { printf '%s\n' "0"; return 0; }
+                for ((i=0; i<count; i++)); do
+                    if [[ "$k" == "${keys[$i]}" ]]; then
+                        printf '%s\n' "${keys[$i]}"
+                        return 0
+                    fi
+                done
+                ;;
+        esac
+    done
+}
+
+# 单个 URL 选项行（当前高亮项整行反色）
+url_row() {
+    local num="$1" name="$2" hint="$3" cur="$4" text
+    text="[${num}] ${name}"
+    [[ -n "$hint" ]] && text="${text} (${hint})"
+    if [[ "$num" == "$cur" ]]; then
+        printf '    %b▸ %s%b\n' "$REV" "$(pad_line "$text" 46)" "$RESET"
+    else
+        printf '    %b%s%b\n' "$WHITE" "$(pad_line "$text" 46)" "$RESET"
+    fi
+}
+
 # 启动服务
 start_service() {
-    clear
-    echo -e "${PRIMARY}  ⚡ 配置流量消耗参数${RESET}"
-    echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
-    echo
-
     load_config
 
-    # URL选择菜单
-    echo -e "${INFO}  请选择下载URL：${RESET}"
-    echo
-    echo -e "    ${GRAY}── 亚洲节点 ──${RESET}"
-    echo -e "    ${SUCCESS}[1]${RESET} ${WHITE}香港 Datapacket 100MB${RESET}      ${GRAY}(推荐，低延迟)${RESET}"
-    echo -e "    ${SUCCESS}[2]${RESET} ${WHITE}日本东京 Datapacket 100MB${RESET}  ${GRAY}(亚洲优选)${RESET}"
-    echo -e "    ${SUCCESS}[3]${RESET} ${WHITE}新加坡 OVH 1GB${RESET}            ${GRAY}(大文件模式)${RESET}"
-    echo
-    echo -e "    ${GRAY}── 欧美节点 ──${RESET}"
-    echo -e "    ${SUCCESS}[4]${RESET} ${WHITE}德国 Hetzner 1GB${RESET}           ${GRAY}(欧洲高速)${RESET}"
-    echo -e "    ${SUCCESS}[5]${RESET} ${WHITE}美西 洛杉矶 Datapacket 1GB${RESET} ${GRAY}(北美)${RESET}"
-    echo -e "    ${SUCCESS}[6]${RESET} ${WHITE}法国 OVH 10GB${RESET}             ${GRAY}(超大文件)${RESET}"
-    echo
-    echo -e "    ${GRAY}── 其他 ──${RESET}"
-    if [[ -n "$LAST_URL" ]]; then
-        echo -e "    ${SUCCESS}[7]${RESET} ${WHITE}上次使用${RESET}               ${GRAY}$LAST_URL${RESET}"
+    local url_choice
+    url_choice=$(select_url_choice)
+    if [[ "$url_choice" == "0" ]]; then
+        return
     fi
-    echo -e "    ${SUCCESS}[8]${RESET} ${WHITE}自定义URL${RESET}"
-    echo
-    read -r -p "  请选择 [1]: " url_choice
-    url_choice=${url_choice:-1}
 
     case $url_choice in
         1) url="http://hkg.download.datapacket.com/100mb.bin" ;;
@@ -983,6 +1028,10 @@ start_service() {
     fi
 
     # 线程数配置
+    clear
+    echo -e "${PRIMARY}  ⚡ 配置流量消耗参数${RESET}"
+    echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
+    echo
     local cpu_cores
     cpu_cores=$(nproc)
     local recommended_threads=$((cpu_cores * 2))
@@ -1160,71 +1209,73 @@ show_logs() {
 
 # 快捷键管理
 shortcut_management() {
-    clear
-    echo -e "${PRIMARY}快捷键管理${RESET}"
-    echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo
+    local choice
+    while true; do
+        clear
+        echo -e "${PRIMARY}快捷键管理${RESET}"
+        echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
+        echo
 
-    local current_shortcut
-    current_shortcut=$(get_shortcut_name)
-    [[ -z "$current_shortcut" ]] && current_shortcut="$DEFAULT_SHORTCUT"
-    if [[ -f "$SHORTCUT_CONFIG" ]]; then
-        safe_source_config "$SHORTCUT_CONFIG" SHORTCUT_NAME SHORTCUT_PATH CREATED_TIME || SHORTCUT_PATH=""
-        if [[ -f "${SHORTCUT_PATH:-/usr/local/bin/$current_shortcut}" ]]; then
-            echo -e "${SUCCESS}✅ 当前快捷键：${PRIMARY}$current_shortcut${RESET}"
-            echo -e "${INFO}   安装路径：${WHITE}${SHORTCUT_PATH:-/usr/local/bin/$current_shortcut}${RESET}"
-            [[ -n "$CREATED_TIME" ]] && echo -e "${INFO}   创建时间：${WHITE}$CREATED_TIME${RESET}"
-        else
-            echo -e "${WARNING}❌ 快捷键文件不存在${RESET}"
-        fi
-    else
-        echo -e "${WARNING}❌ 快捷键未安装${RESET}"
-    fi
-
-    echo
-    echo -e "${WHITE}1) 安装/重新安装快捷键${RESET}"
-    echo -e "${WHITE}2) 自定义快捷键名称${RESET}"
-    echo -e "${WHITE}3) 删除快捷键${RESET}"
-    echo -e "${WHITE}0) 返回主菜单${RESET}"
-    echo
-
-    read -r -p "请选择 [0-3]：" choice
-    case $choice in
-        1)
-            create_shortcut "$current_shortcut"
-            read -r -p "按回车继续..."
-            shortcut_management
-            ;;
-        2)
-            echo -e "${INFO}当前快捷键：${PRIMARY}$current_shortcut${RESET}"
-            read -r -p "请输入新的快捷键名称（英文字母开头）：" new_name
-
-            # 验证快捷键名称
-            if [[ ! "$new_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]; then
-                echo -e "${DANGER}❌ 无效名称！只能使用英文字母、数字和下划线，且必须以字母开头${RESET}"
-            elif [[ -z "$new_name" ]]; then
-                echo -e "${WARNING}❌ 快捷键名称不能为空${RESET}"
-            elif [[ "$new_name" == "$current_shortcut" ]]; then
-                echo -e "${WARNING}⚠️ 与当前快捷键相同${RESET}"
+        local current_shortcut
+        current_shortcut=$(get_shortcut_name)
+        [[ -z "$current_shortcut" ]] && current_shortcut="$DEFAULT_SHORTCUT"
+        if [[ -f "$SHORTCUT_CONFIG" ]]; then
+            safe_source_config "$SHORTCUT_CONFIG" SHORTCUT_NAME SHORTCUT_PATH CREATED_TIME || SHORTCUT_PATH=""
+            if [[ -f "${SHORTCUT_PATH:-/usr/local/bin/$current_shortcut}" ]]; then
+                echo -e "${SUCCESS}✅ 当前快捷键：${PRIMARY}$current_shortcut${RESET}"
+                echo -e "${INFO}   安装路径：${WHITE}${SHORTCUT_PATH:-/usr/local/bin/$current_shortcut}${RESET}"
+                [[ -n "$CREATED_TIME" ]] && echo -e "${INFO}   创建时间：${WHITE}$CREATED_TIME${RESET}"
             else
-                create_shortcut "$new_name"
-                echo -e "${SUCCESS}✅ 快捷键已更新为：${PRIMARY}$new_name${RESET}"
+                echo -e "${WARNING}❌ 快捷键文件不存在${RESET}"
             fi
-            read -r -p "按回车继续..."
-            shortcut_management
-            ;;
-        3)
-            remove_shortcut
-            read -r -p "按回车继续..."
-            shortcut_management
-            ;;
-        0) return ;;
-        *)
-            echo -e "${DANGER}无效选项${RESET}"
-            sleep 1
-            shortcut_management
-            ;;
-    esac
+        else
+            echo -e "${WARNING}❌ 快捷键未安装${RESET}"
+        fi
+
+        echo
+        echo -e "${WHITE}1) 安装/重新安装快捷键${RESET}"
+        echo -e "${WHITE}2) 自定义快捷键名称${RESET}"
+        echo -e "${WHITE}3) 删除快捷键${RESET}"
+        echo -e "${WHITE}0) 返回主菜单${RESET}"
+        echo
+
+        read -r -p "请选择 [0-3]：" choice
+        case $choice in
+            1)
+                create_shortcut "$current_shortcut"
+                read -r -p "按回车继续..."
+                continue
+                ;;
+            2)
+                echo -e "${INFO}当前快捷键：${PRIMARY}$current_shortcut${RESET}"
+                read -r -p "请输入新的快捷键名称（英文字母开头）：" new_name
+
+                # 验证快捷键名称（先判空再判格式）
+                if [[ -z "$new_name" ]]; then
+                    echo -e "${WARNING}❌ 快捷键名称不能为空${RESET}"
+                elif [[ ! "$new_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]; then
+                    echo -e "${DANGER}❌ 无效名称！只能使用英文字母、数字和下划线，且必须以字母开头${RESET}"
+                elif [[ "$new_name" == "$current_shortcut" ]]; then
+                    echo -e "${WARNING}⚠️ 与当前快捷键相同${RESET}"
+                else
+                    create_shortcut "$new_name"
+                    echo -e "${SUCCESS}✅ 快捷键已更新为：${PRIMARY}$new_name${RESET}"
+                fi
+                read -r -p "按回车继续..."
+                continue
+                ;;
+            3)
+                remove_shortcut
+                read -r -p "按回车继续..."
+                continue
+                ;;
+            0) return ;;
+            *)
+                echo -e "${DANGER}无效选项${RESET}"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 测试监控功能
@@ -1299,7 +1350,7 @@ test_monitor() {
             echo -e "${WARNING}测试中，请稍等...${RESET}"
 
             # 启动后台监控测试
-            timeout 10 bash -c "
+            timeout 12 bash -c "
                 source /dev/stdin << 'TESTEOF'
 INTERFACE='$test_interface'
 safe_read_bytes() {
@@ -1393,6 +1444,10 @@ advanced_monitor() {
     read -r -p "请输入上传速度警告阈值 [50]：" ul_threshold
     ul_threshold=${ul_threshold:-50}
 
+    # 输入校验（非数字视为 0=禁用）
+    [[ "$dl_threshold" =~ ^[0-9]+$ ]] || dl_threshold=0
+    [[ "$ul_threshold" =~ ^[0-9]+$ ]] || ul_threshold=0
+
     # 转换为字节
     local dl_threshold_bytes=$((dl_threshold * 1024 * 1024))
     local ul_threshold_bytes=$((ul_threshold * 1024 * 1024))
@@ -1439,7 +1494,7 @@ advanced_monitor_loop() {
     echo -e "${PRIMARY}                          高级实时流量监控${RESET}"
     echo -e "${INFO}              网络接口: ${WHITE}$interface${RESET} | 刷新间隔: ${WHITE}${refresh_interval}s${RESET}"
     echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "${WARNING}按 Ctrl+C 退出 | 按 s 保存数据 | 按 r 重置统计${RESET}"
+    echo -e "${WARNING}按 Q / Ctrl+C 退出 | 按 s 保存数据 | 按 r 重置统计${RESET}"
     echo
 
     trap 'echo -e "\n${WARNING}正在保存数据并退出...${RESET}"; save_monitor_data "$interface" "$RX_TOTAL" "$TX_TOTAL" "$DURATION" "$RX_PEAK" "$TX_PEAK"; exit 0' INT
@@ -1569,19 +1624,36 @@ advanced_monitor_loop() {
 
         echo
         echo -e "${GRAY}└─────────────────────────────────────────────────────────────────────────────┘${RESET}"
-        echo -e "${GRAY}按 Ctrl+C 退出 | s:保存数据 | r:重置统计${RESET}"
+        echo -e "${GRAY}按 Q / Ctrl+C 退出 | s:保存数据 | r:重置统计${RESET}"
+
+        # 键盘控制：s 保存数据 / r 重置统计 / q 退出
+        local key=""
+        if IFS= read -rsn1 -t 0.15 key 2>/dev/null; then
+            case "$key" in
+                q|Q|$'\e') break ;;
+                s|S)
+                    save_monitor_data "$interface" "$RX_TOTAL" "$TX_TOTAL" "$DURATION" "$RX_PEAK" "$TX_PEAK"
+                    ;;
+                r|R)
+                    RX_TOTAL=0; TX_TOTAL=0; DURATION=0
+                    RX_PEAK=0; TX_PEAK=0; RX_PEAK_TIME=""; TX_PEAK_TIME=""
+                    ALERT_COUNT=0
+                    ;;
+            esac
+        fi
     done
 }
 
-# 字节格式化函数 - 优化版
+# 字节格式化函数 - 优化版（awk 替代 bc）
 format_bytes_per_sec() {
     local bytes=$1
+    [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
     if [[ $bytes -ge 1073741824 ]]; then
-        printf "%.2f GB/s" "$(echo "scale=2; $bytes/1073741824" | bc 2>/dev/null || echo "$((bytes/1073741824))")"
+        awk -v b="$bytes" 'BEGIN { printf "%.2f GB/s", b / 1073741824 }'
     elif [[ $bytes -ge 1048576 ]]; then
-        printf "%.2f MB/s" "$(echo "scale=2; $bytes/1048576" | bc 2>/dev/null || echo "$((bytes/1048576))")"
+        awk -v b="$bytes" 'BEGIN { printf "%.2f MB/s", b / 1048576 }'
     elif [[ $bytes -ge 1024 ]]; then
-        printf "%.2f KB/s" "$(echo "scale=2; $bytes/1024" | bc 2>/dev/null || echo "$((bytes/1024))")"
+        awk -v b="$bytes" 'BEGIN { printf "%.2f KB/s", b / 1024 }'
     else
         printf "%d B/s" "$bytes"
     fi
@@ -1589,12 +1661,13 @@ format_bytes_per_sec() {
 
 format_bytes() {
     local bytes=$1
+    [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
     if [[ $bytes -ge 1073741824 ]]; then
-        printf "%.2f GB" "$(echo "scale=2; $bytes/1073741824" | bc 2>/dev/null || echo "$((bytes/1073741824))")"
+        awk -v b="$bytes" 'BEGIN { printf "%.2f GB", b / 1073741824 }'
     elif [[ $bytes -ge 1048576 ]]; then
-        printf "%.2f MB" "$(echo "scale=2; $bytes/1048576" | bc 2>/dev/null || echo "$((bytes/1048576))")"
+        awk -v b="$bytes" 'BEGIN { printf "%.2f MB", b / 1048576 }'
     elif [[ $bytes -ge 1024 ]]; then
-        printf "%.2f KB" "$(echo "scale=2; $bytes/1024" | bc 2>/dev/null || echo "$((bytes/1024))")"
+        awk -v b="$bytes" 'BEGIN { printf "%.2f KB", b / 1024 }'
     else
         printf "%d B" "$bytes"
     fi
@@ -1775,6 +1848,9 @@ check_update() {
                     read -r -p "现在重启脚本？ (Y/n): " restart_now
                     if [[ ! "$restart_now" =~ ^[Nn]$ ]]; then
                         rm -f "$temp_file"
+                        # 恢复终端屏幕再重启，避免残留备用屏状态
+                        tput rmcup 2>/dev/null
+                        tput cnorm 2>/dev/null
                         exec bash "$current_script"
                     fi
                 else
@@ -1808,10 +1884,11 @@ check_update() {
 # 格式化文件大小
 format_file_size() {
     local size=$1
+    [[ "$size" =~ ^[0-9]+$ ]] || size=0
     if [[ $size -ge 1048576 ]]; then
-        printf "%.2f MB" "$(echo "scale=2; $size/1048576" | bc 2>/dev/null || echo "$((size/1048576))")"
+        awk -v s="$size" 'BEGIN { printf "%.2f MB", s / 1048576 }'
     elif [[ $size -ge 1024 ]]; then
-        printf "%.2f KB" "$(echo "scale=2; $size/1024" | bc 2>/dev/null || echo "$((size/1024))")"
+        awk -v s="$size" 'BEGIN { printf "%.2f KB", s / 1024 }'
     else
         printf "%d B" "$size"
     fi
@@ -1819,14 +1896,53 @@ format_file_size() {
 
 # ──────────────────────────────── 流量目标管理 ──────────────────────────────
 
+# 创建流量目标自动停止检查脚本
+create_target_check_script() {
+    {
+        echo '#!/bin/bash'
+        emit_common_library
+        cat << 'TARGETEOF'
+# 流量目标自动停止检查脚本
+TARGET_FILE="/root/milier_target.conf"
+
+safe_source_target_config || exit 0
+[[ "$TARGET_AUTO_STOP" != "true" ]] && exit 0
+[[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] || exit 0
+
+INTERFACE="${TARGET_INTERFACE:-eth0}"
+CURRENT_RX=$(cat "/sys/class/net/$INTERFACE/statistics/rx_bytes" 2>/dev/null || echo 0)
+START_RX="${TARGET_START_RX:-0}"
+PREV_CONSUMED="${TARGET_PREV_CONSUMED:-0}"
+[[ "$CURRENT_RX" =~ ^[0-9]+$ ]] || CURRENT_RX=0
+[[ "$START_RX" =~ ^[0-9]+$ ]] || START_RX=0
+[[ "$PREV_CONSUMED" =~ ^[0-9]+$ ]] || PREV_CONSUMED=0
+if [[ $CURRENT_RX -ge $START_RX ]]; then
+    CONSUMED=$((CURRENT_RX - START_RX + PREV_CONSUMED))
+else
+    CONSUMED=$((CURRENT_RX + PREV_CONSUMED))
+fi
+TARGET_BYTES=$(awk -v gb="$TARGET_GB" 'BEGIN { printf "%.0f", gb * 1073741824 }' 2>/dev/null || echo 0)
+TARGET_BYTES="${TARGET_BYTES%.*}"
+[[ "$TARGET_BYTES" =~ ^[0-9]+$ && "$TARGET_BYTES" -gt 0 ]] || exit 0
+
+if [[ $CONSUMED -ge $TARGET_BYTES ]] 2>/dev/null; then
+    systemctl stop milier_flow 2>/dev/null
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): 流量目标 ${TARGET_GB}GB 已达成，服务已自动停止" >> /root/milier_flow.log
+fi
+TARGETEOF
+    } > /root/milier_target_check.sh
+    chmod +x /root/milier_target_check.sh
+}
+
 # 设置流量消耗目标
 set_traffic_target() {
+    local target_file="$TARGET_CONFIG_FILE"
+    local choice
+    while true; do
     clear
     echo -e "${PRIMARY}  🎯 流量消耗目标设置${RESET}"
     echo -e "${GRAY}  ─────────────────────────────────────────────────────────────────${RESET}"
     echo
-
-    local target_file="$TARGET_CONFIG_FILE"
 
     # 显示当前目标
     if load_target_config; then
@@ -1848,7 +1964,7 @@ set_traffic_target() {
             if [[ -n "$interface" ]] && [[ -d "/sys/class/net/$interface" ]]; then
                 local current_rx target_bytes
                 current_rx=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
-                target_bytes=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null | cut -d. -f1)
+                target_bytes=$(awk -v gb="$TARGET_GB" 'BEGIN { printf "%.0f", gb * 1073741824 }' 2>/dev/null)
                 local start_bytes=${TARGET_START_RX:-$current_rx}
                 [[ "$current_rx" =~ ^[0-9]+$ ]] || current_rx=0
                 [[ "$target_bytes" =~ ^[0-9]+$ ]] || target_bytes=0
@@ -1862,7 +1978,7 @@ set_traffic_target() {
                     consumed=$((current_rx + previous))
                 fi
                 local consumed_gb
-                consumed_gb=$(echo "scale=2; $consumed/1073741824" | bc 2>/dev/null || echo "$((consumed/1073741824))")
+                consumed_gb=$(awk -v b="$consumed" 'BEGIN { printf "%.2f", b / 1073741824 }' 2>/dev/null || echo "$((consumed/1073741824))")
                 local percent=$(( target_bytes > 0 ? consumed * 100 / target_bytes : 0 ))
                 [[ $percent -gt 100 ]] && percent=100
 
@@ -1895,18 +2011,17 @@ set_traffic_target() {
     echo -e "  ${WHITE}[0]${RESET} 返回主菜单"
     echo
 
-    read -r -p "  请选择 [0-3]：" target_choice
-    case $target_choice in
+    read -r -p "  请选择 [0-3]：" choice
+    case $choice in
         1)
             echo
             echo -e "  ${INFO}请输入流量目标（单位：GB）：${RESET}"
             read -r -p "  目标流量(GB): " target_gb
 
-            if ! [[ "$target_gb" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ $(echo "$target_gb == 0" | bc 2>/dev/null) == "1" ]]; then
+            if ! [[ "$target_gb" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ "$(awk -v v="$target_gb" 'BEGIN { print (v == 0) ? 1 : 0 }' 2>/dev/null || echo 1)" == "1" ]]; then
                 echo -e "  ${DANGER}❌ 请输入有效的数值${RESET}"
                 read -r -p "  按回车继续..."
-                set_traffic_target
-                return
+                continue
             fi
 
             load_config
@@ -1921,7 +2036,7 @@ set_traffic_target() {
                 echo -e "  ${DANGER}❌ 流量目标保存失败${RESET}"
             fi
             read -r -p "  按回车继续..."
-            set_traffic_target
+            continue
             ;;
         2)
             rm -f "$target_file"
@@ -1929,87 +2044,32 @@ set_traffic_target() {
             rm -f /root/milier_target_check.sh
             echo -e "  ${SUCCESS}✅ 流量目标已清除${RESET}"
             read -r -p "  按回车继续..."
-            set_traffic_target
+            continue
             ;;
         3)
             if [[ -f "$target_file" ]]; then
                 if load_target_config && [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
                     if [[ "${TARGET_AUTO_STOP:-false}" == "true" ]]; then
-                        save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "false" "${TARGET_PREV_CONSUMED:-0}" || {
+                        if save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "false" "${TARGET_PREV_CONSUMED:-0}"; then
+                            crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
+                            rm -f /root/milier_target_check.sh
+                            echo -e "  ${SUCCESS}✅ 自动停止已关闭${RESET}"
+                        else
                             echo -e "  ${DANGER}❌ 自动停止配置保存失败${RESET}"
-                            read -r -p "  按回车继续..."
-                            set_traffic_target
-                            return
-                        }
-                        crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
-                        rm -f /root/milier_target_check.sh
-                        echo -e "  ${SUCCESS}✅ 自动停止已关闭${RESET}"
-                        read -r -p "  按回车继续..."
-                        set_traffic_target
-                        return
-                    fi
+                        fi
+                    elif save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "true" "${TARGET_PREV_CONSUMED:-0}"; then
+                        echo -e "  ${SUCCESS}✅ 自动停止已启用${RESET}"
+                        echo -e "  ${INFO}当流量达到 ${WHITE}${TARGET_GB} GB${RESET} ${INFO}时，服务将自动停止${RESET}"
 
-                    save_target_config "$TARGET_GB" "${TARGET_START_RX:-0}" "${TARGET_INTERFACE:-eth0}" "true" "${TARGET_PREV_CONSUMED:-0}" || {
+                        # 创建后台检查脚本
+                        create_target_check_script
+
+                        # 添加到crontab (每5分钟检查一次)
+                        (crontab -l 2>/dev/null | grep -v "milier_target_check.sh"; echo "*/5 * * * * /bin/bash /root/milier_target_check.sh") | crontab -
+                        echo -e "  ${INFO}已添加定时检查任务 (每5分钟检查一次)${RESET}"
+                    else
                         echo -e "  ${DANGER}❌ 自动停止配置保存失败${RESET}"
-                        read -r -p "  按回车继续..."
-                        set_traffic_target
-                        return
-                    }
-                    echo -e "  ${SUCCESS}✅ 自动停止已启用${RESET}"
-                    echo -e "  ${INFO}当流量达到 ${WHITE}${TARGET_GB} GB${RESET} ${INFO}时，服务将自动停止${RESET}"
-
-                    # 创建后台检查脚本
-                    cat > /root/milier_target_check.sh << 'TARGETEOF'
-#!/bin/bash
-# 流量目标自动停止检查脚本
-TARGET_FILE="/root/milier_target.conf"
-
-safe_source_target_config() {
-    [[ -f "$TARGET_FILE" ]] || return 1
-    local allowed=" TARGET_GB TARGET_START_RX TARGET_INTERFACE TARGET_SET_TIME TARGET_AUTO_STOP TARGET_PREV_CONSUMED "
-    local line key value
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=\"([^\"]*)\"[[:space:]]*$ ]] || return 1
-        key="${BASH_REMATCH[1]}"
-        value="${BASH_REMATCH[2]}"
-        [[ "$allowed" == *" $key "* ]] || return 1
-        [[ "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *'"'* && "$value" != *'`'* && "$value" != *'$'* && "$value" != *\\* ]] || return 1
-    done < "$TARGET_FILE"
-    source "$TARGET_FILE"
-}
-
-safe_source_target_config || exit 0
-[[ "$TARGET_AUTO_STOP" != "true" ]] && exit 0
-[[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] || exit 0
-
-INTERFACE="${TARGET_INTERFACE:-eth0}"
-CURRENT_RX=$(cat "/sys/class/net/$INTERFACE/statistics/rx_bytes" 2>/dev/null || echo 0)
-START_RX="${TARGET_START_RX:-0}"
-PREV_CONSUMED="${TARGET_PREV_CONSUMED:-0}"
-[[ "$CURRENT_RX" =~ ^[0-9]+$ ]] || CURRENT_RX=0
-[[ "$START_RX" =~ ^[0-9]+$ ]] || START_RX=0
-[[ "$PREV_CONSUMED" =~ ^[0-9]+$ ]] || PREV_CONSUMED=0
-if [[ $CURRENT_RX -ge $START_RX ]]; then
-    CONSUMED=$((CURRENT_RX - START_RX + PREV_CONSUMED))
-else
-    CONSUMED=$((CURRENT_RX + PREV_CONSUMED))
-fi
-TARGET_BYTES=$(echo "$TARGET_GB * 1073741824" | bc 2>/dev/null || echo 0)
-TARGET_BYTES="${TARGET_BYTES%.*}"
-[[ "$TARGET_BYTES" =~ ^[0-9]+$ && "$TARGET_BYTES" -gt 0 ]] || exit 0
-
-if [[ $CONSUMED -ge $TARGET_BYTES ]] 2>/dev/null; then
-    systemctl stop milier_flow 2>/dev/null
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): 流量目标 ${TARGET_GB}GB 已达成，服务已自动停止" >> /root/milier_flow.log
-fi
-TARGETEOF
-                    chmod +x /root/milier_target_check.sh
-
-                    # 添加到crontab (每5分钟检查一次)
-                    (crontab -l 2>/dev/null | grep -v "milier_target_check.sh"; echo "*/5 * * * * /bin/bash /root/milier_target_check.sh") | crontab -
-                    echo -e "  ${INFO}已添加定时检查任务 (每5分钟检查一次)${RESET}"
+                    fi
                 else
                     echo -e "  ${WARNING}请先设置流量目标${RESET}"
                 fi
@@ -2017,15 +2077,15 @@ TARGETEOF
                 echo -e "  ${WARNING}请先设置流量目标${RESET}"
             fi
             read -r -p "  按回车继续..."
-            set_traffic_target
+            continue
             ;;
         0) return ;;
         *)
             echo -e "  ${DANGER}无效选项${RESET}"
             sleep 1
-            set_traffic_target
             ;;
     esac
+    done
 }
 
 # 网络速度测试
@@ -2036,43 +2096,49 @@ speed_test() {
     echo
 
     echo -e "  ${INFO}正在测试下载速度...${RESET}"
-    echo -e "  ${GRAY}测试文件：香港 Datapacket（取前10MB）${RESET}"
+    echo -e "  ${GRAY}测试文件：香港 Datapacket（4 并发 × 10MB）${RESET}"
     echo
 
-    local start_time
+    local start_time end_time bytes_downloaded
     start_time=$(date +%s%N)
-    local bytes_downloaded=0
-
-    # 下载测试 (10MB快速测试)
     local test_url="http://hkg.download.datapacket.com/100mb.bin"
-    bytes_downloaded=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 --connect-timeout 5 -r 0-10485759 "$test_url" 2>/dev/null)
-    local end_time
+
+    if command -v xargs &>/dev/null && command -v seq &>/dev/null; then
+        # 4 并发下载测试，更接近多线程服务的真实吞吐
+        local tmp_dir
+        tmp_dir=$(mktemp -d /tmp/milier_speedtest.XXXXXX)
+        seq 4 | xargs -P4 -I{} curl -s -o /dev/null -w '%{size_download}\n' \
+            --max-time 15 --connect-timeout 5 -r 0-10485759 "$test_url" 2>/dev/null > "$tmp_dir/sizes"
+        bytes_downloaded=$(awk '{s += $1} END {print s + 0}' "$tmp_dir/sizes" 2>/dev/null || echo 0)
+        rm -rf "$tmp_dir"
+    else
+        # 缺少 xargs/seq 时退回单连接测试
+        bytes_downloaded=$(curl -s -o /dev/null -w '%{size_download}' --max-time 15 --connect-timeout 5 -r 0-10485759 "$test_url" 2>/dev/null || echo 0)
+    fi
     end_time=$(date +%s%N)
 
     if [[ -n "$bytes_downloaded" ]] && [[ "$bytes_downloaded" -gt 0 ]] 2>/dev/null; then
         local elapsed_ms=$(( (end_time - start_time) / 1000000 ))
         [[ $elapsed_ms -eq 0 ]] && elapsed_ms=1
         local speed_bps=$(( bytes_downloaded * 1000 / elapsed_ms ))
-        local speed_mbps
-        speed_mbps=$(echo "scale=2; $speed_bps / 1048576" | bc 2>/dev/null || echo "$((speed_bps / 1048576))")
+        local speed_mbps grade
+        speed_mbps=$(awk -v b="$speed_bps" 'BEGIN { printf "%.2f", b / 1048576 }')
+        grade=$(awk -v s="$speed_mbps" 'BEGIN { if (s > 100) print 4; else if (s > 50) print 3; else if (s > 10) print 2; else print 1 }')
 
         echo -e "  ${SUCCESS}✅ 测试完成${RESET}"
         echo
-        echo -e "  ${INFO}下载数据：${WHITE}$(format_bytes $bytes_downloaded 2>/dev/null || echo "${bytes_downloaded} B")${RESET}"
+        echo -e "  ${INFO}下载数据：${WHITE}$(format_bytes "$bytes_downloaded" 2>/dev/null || echo "${bytes_downloaded} B")${RESET}"
         echo -e "  ${INFO}耗时：${WHITE}${elapsed_ms} ms${RESET}"
         echo -e "  ${INFO}下载速度：${WHITE}${speed_mbps} MB/s${RESET}"
         echo
 
         # 速度评级
-        if [[ $(echo "$speed_mbps > 100" | bc 2>/dev/null) == "1" ]]; then
-            echo -e "  ${SUCCESS}⭐ 网络速度极快！非常适合大量流量消耗${RESET}"
-        elif [[ $(echo "$speed_mbps > 50" | bc 2>/dev/null) == "1" ]]; then
-            echo -e "  ${SUCCESS}👍 网络速度良好${RESET}"
-        elif [[ $(echo "$speed_mbps > 10" | bc 2>/dev/null) == "1" ]]; then
-            echo -e "  ${WARNING}⚡ 网络速度一般${RESET}"
-        else
-            echo -e "  ${DANGER}⚠️ 网络速度较慢${RESET}"
-        fi
+        case "$grade" in
+            4) echo -e "  ${SUCCESS}⭐ 网络速度极快！非常适合大量流量消耗${RESET}" ;;
+            3) echo -e "  ${SUCCESS}👍 网络速度良好${RESET}" ;;
+            2) echo -e "  ${WARNING}⚡ 网络速度一般${RESET}" ;;
+            *) echo -e "  ${DANGER}⚠️ 网络速度较慢${RESET}" ;;
+        esac
     else
         echo -e "  ${DANGER}❌ 速度测试失败，请检查网络连接${RESET}"
     fi
@@ -2127,13 +2193,14 @@ uninstall_service() {
         rm -f "$TARGET_CONFIG_FILE"
         rm -f "$PRESET_CONFIG_FILE"
 
-        # 6. 删除日志文件
+        # 6. 删除日志文件（含监控数据文件）
         rm -f "$LOG_FILE"
         rm -f /root/milier_flow*.log
+        rm -f /root/milier_monitor_data.log
 
         # 7. 清理临时文件和缓存
         rm -f /tmp/milier_*
-        rm -f /tmp/milier_latest_check.sh
+        rm -f /tmp/milier_latest_check.*
 
         # 8. 清理 crontab 中的相关条目
         crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
@@ -2161,86 +2228,234 @@ uninstall_service() {
     fi
 }
 
-# ──────────────────────────────── 主菜单显示 ──────────────────────────────────
+# ──────────────────────── 主菜单（方向键交互 + 实时刷新） ────────────────────────
 
-# 获取服务状态标识
-get_status_badge() {
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo -e "${SUCCESS}● 运行中${RESET}"
-    else
-        echo -e "${DANGER}○ 已停止${RESET}"
-    fi
+# ── 终端绘制工具（自适应宽度 / 中文对齐） ──
+
+repeat() {
+    local ch="$1" n="$2" out
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    (( n <= 0 )) && return 0
+    printf -v out '%*s' "$n" ''
+    printf '%s' "${out// /$ch}"
 }
 
-# 获取流量目标摘要
-get_target_summary() {
-    if load_target_config; then
-        if [[ "$TARGET_GB" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$TARGET_GB" != "0" ]]; then
-            local auto_stop=""
-            [[ "$TARGET_AUTO_STOP" == "true" ]] && auto_stop=" ${MUTED}· 自动停止${RESET}"
+term_width() {
+    local w
+    w=$(tput cols 2>/dev/null)
+    [[ "$w" =~ ^[0-9]+$ ]] || w="${COLUMNS:-80}"
+    [[ "$w" =~ ^[0-9]+$ ]] || w=80
+    (( w < 60 )) && w=60
+    printf '%d' "$w"
+}
 
-            local interface="${TARGET_INTERFACE:-}" current_rx start_rx previous consumed target_bytes percent consumed_gb
-            if validate_interface_name "$interface" && [[ -r "/sys/class/net/$interface/statistics/rx_bytes" ]]; then
-                current_rx=$(cat "/sys/class/net/$interface/statistics/rx_bytes" 2>/dev/null || echo 0)
-                start_rx="${TARGET_START_RX:-0}"
-                previous="${TARGET_PREV_CONSUMED:-0}"
-                [[ "$current_rx" =~ ^[0-9]+$ ]] || current_rx=0
-                [[ "$start_rx" =~ ^[0-9]+$ ]] || start_rx=0
-                [[ "$previous" =~ ^[0-9]+$ ]] || previous=0
+# 显示宽度：CJK/全角字符按 2 列计
+str_width() {
+    local s="$1"
+    case "${LANG:-${LC_ALL:-${LC_CTYPE:-}}}" in
+        *UTF-8*|*utf-8*|*UTF8*|*utf8*)
+            local c n=0 i
+            for ((i=0; i<${#s}; i++)); do
+                c="${s:i:1}"
+                if [[ "$c" =~ [\ -~] ]]; then n=$((n+1)); else n=$((n+2)); fi
+            done
+            printf '%d' "$n"
+            ;;
+        *)  printf '%d' "${#s}" ;;
+    esac
+}
 
-                if [[ $current_rx -ge $start_rx ]]; then
-                    consumed=$((current_rx - start_rx + previous))
-                else
-                    consumed=$((current_rx + previous))
-                fi
-                target_bytes=$(awk -v gb="$TARGET_GB" 'BEGIN {printf "%.0f", gb * 1073741824}')
-                percent=$((target_bytes > 0 ? consumed * 100 / target_bytes : 0))
-                [[ $percent -gt 100 ]] && percent=100
-                consumed_gb=$(awk -v bytes="$consumed" 'BEGIN {printf "%.2f", bytes / 1073741824}')
-                echo -e "${VALUE}${consumed_gb} / ${TARGET_GB} GB${RESET} ${MUTED}· ${percent}%${RESET}${auto_stop}"
-                return
-            fi
+pad_line() {
+    local text="$1" width="$2" tw pad
+    tw=$(str_width "$text")
+    pad=$((width - tw))
+    (( pad < 0 )) && pad=0
+    printf '%s%s' "$text" "$(repeat ' ' "$pad")"
+}
 
-            echo -e "${VALUE}${TARGET_GB} GB${RESET}${auto_stop}"
-            return
+center_text() {
+    local text="$1" field="$2" tw pad
+    tw=$(str_width "$text")
+    pad=$(( (field - tw) / 2 ))
+    (( pad < 0 )) && pad=0
+    printf '%s%s%s' "$(repeat ' ' "$pad")" "$text" "$(repeat ' ' $((field - tw - pad)))"
+}
+
+# 绿→黄→红渐变进度条
+gradient_bar() {
+    local percent="$1" width="$2" fill i c
+    [[ "$percent" =~ ^[0-9]+$ ]] || percent=0
+    [[ "$width" =~ ^[0-9]+$ ]] || width=20
+    (( width < 8 )) && width=8
+    (( width > 34 )) && width=34
+    fill=$((percent * width / 100))
+    (( fill > width )) && fill=width
+    (( fill < 0 )) && fill=0
+    printf '%b[%b' "$PRIMARY" "$RESET"
+    for ((i=1; i<=width; i++)); do
+        if (( i <= fill )); then
+            if (( percent >= 80 )); then c="$DANGER"
+            elif (( percent >= 50 )); then c="$WARNING"
+            else c="$SUCCESS"; fi
+            printf '%b█%b' "$c" "$RESET"
+        else
+            printf '░'
         fi
+    done
+    printf '%b]%b' "$PRIMARY" "$RESET"
+}
+
+# ── 菜单数据 ──
+
+MENU_KEYS=("1" "2" "3" "4" "5" "6" "7" "8" "9" "A" "B" "U" "0")
+MENU_LABELS=(
+    "启动或重新配置" "停止服务" "重启服务" "流量目标"
+    "实时流量监控" "高级流量监控" "功能诊断" "网络测速"
+    "查看服务日志" "快捷键管理" "检查脚本更新" "卸载全部服务"
+    "退出控制台"
+)
+MENU_DESCS=(
+    "选择下载源与线程数，启动后台流量消耗服务"
+    "停止 systemd 后台服务"
+    "重启 systemd 后台服务"
+    "设置流量消耗目标与自动停止"
+    "全屏实时速率与累计流量"
+    "带阈值告警、峰值与趋势图的高级监控"
+    "检测监控链路（脚本/接口/权限/命令）"
+    "4 并发下载测速与评级"
+    "查看最近 50 行服务日志"
+    "安装 / 重命名 / 删除 xh 快捷键"
+    "对比远端版本并一键更新"
+    "彻底删除服务、配置与缓存（危险）"
+    "退出控制台"
+)
+MENU_COUNT=${#MENU_KEYS[@]}
+MENU_SELECTED=0
+MENU_RESIZED=0
+MENU_IDLE_REFRESH=2
+MENU_SPEED_STATE="/tmp/milier_menu_speed.state"
+
+# ── 交互 ──
+
+# 读取一个按键：UP / DOWN / ENTER / ESC / TIMEOUT / 单字符
+menu_read_key() {
+    local k=''
+    IFS= read -rsn1 -t "$MENU_IDLE_REFRESH" k 2>/dev/null || { printf 'TIMEOUT'; return 0; }
+    if [[ "$k" == $'\e' ]]; then
+        local seq=''
+        IFS= read -rsn2 -t 0.1 seq 2>/dev/null
+        case "$seq" in
+            '[A') printf 'UP' ;;
+            '[B') printf 'DOWN' ;;
+            *)    printf 'ESC' ;;
+        esac
+        return 0
     fi
-    echo -e "${GRAY}未设置${RESET}"
+    [[ -z "$k" ]] && { printf 'ENTER'; return 0; }
+    printf '%s' "$k"
 }
 
-# 主菜单中的状态行和操作项统一由两个函数输出，保持竖排对齐。
-print_status_row() {
-    local label="$1" value="$2"
-    printf "  %b%s%b  %b\n" "$LABEL" "$label" "$RESET" "$value"
+# 当前速率：跨渲染读取真实接口增量（MB/s）
+get_current_speed() {
+    local iface rx now prev ts dt
+    iface=$(list_network_interfaces | head -1)
+    if [[ -z "$iface" ]]; then
+        CURRENT_SPEED=""
+        return 0
+    fi
+    rx=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    prev=0; ts=0
+    [[ -f "$MENU_SPEED_STATE" ]] && IFS=' ' read -r prev ts < "$MENU_SPEED_STATE"
+    [[ "$prev" =~ ^[0-9]+$ ]] || prev=0
+    [[ "$ts" =~ ^[0-9]+$ ]] || ts=$now
+    dt=$((now - ts))
+    if [[ "$rx" =~ ^[0-9]+$ ]] && (( dt > 0 )) && (( rx >= prev )); then
+        CURRENT_SPEED=$(( (rx - prev) / dt / 1048576 ))
+    else
+        CURRENT_SPEED=""
+    fi
+    printf '%s %s\n' "$rx" "$now" > "$MENU_SPEED_STATE"
 }
 
-print_menu_item() {
-    local key="$1" label="$2"
-    printf "  %b[%s]%b %b%s%b\n" "$KEY" "$key" "$RESET" "$WHITE" "$label" "$RESET"
-}
+# ── 绘制组件 ──
 
-print_menu_section() {
-    local title="$1"
-    printf "  %b%s%b\n" "${WHITE}${BOLD}" "$title" "$RESET"
-}
-
-show_menu() {
-    clear
-
+draw_header() {
+    local width="$1" inner
+    inner=$((width-6))
+    printf '  %b╔%s╗%b\n' "$PRIMARY" "$(repeat '═' "$inner")" "$RESET"
+    printf '  %b║%b%s%b║%b\n' "$PRIMARY" "$RESET" "$(center_text '米粒儿 VPS 流量控制台' "$inner")" "$PRIMARY" "$RESET"
+    printf '  %b║%b%s%b║%b\n' "$PRIMARY" "$RESET" "$(center_text "${SCRIPT_VERSION} · ↑↓ 选择  Enter 确认  数字键直达  Q 退出" "$inner")" "$PRIMARY" "$RESET"
+    printf '  %b╚%s╝%b\n' "$PRIMARY" "$(repeat '═' "$inner")" "$RESET"
     echo
-    echo -e "  ${PRIMARY}${BOLD}米粒儿 VPS 流量控制台${RESET}  ${MUTED}${SCRIPT_VERSION}${RESET}"
-    echo -e "  ${PANEL}──────────────────────────────────────────────${RESET}"
-    echo
+}
 
-    local status_badge target_summary
-    status_badge=$(get_status_badge)
-    target_summary=$(get_target_summary)
-    local pid_value="--"
+box_top() {
+    local title="$1" width="$2" fill
+    fill=$((width - 9 - $(str_width "$title")))
+    (( fill < 0 )) && fill=0
+    printf '  %b┌─ %b%s%b %s%b┐%b\n' "$PRIMARY" "${WHITE}${BOLD}" "$title" "$RESET" "$(repeat '─' "$fill")" "$PRIMARY" "$RESET"
+}
+
+box_bottom() {
+    local width="$1"
+    printf '  %b└%s┘%b\n' "$PRIMARY" "$(repeat '─' $((width-6)))" "$RESET"
+}
+
+panel_row() {
+    local label="$1" value="$2" pad
+    pad=$(repeat ' ' $((10 - $(str_width "$label"))))
+    printf '  %b│%b  %b%s%b%s%b%s%b\n' "$GRAY" "$RESET" "$LABEL" "$label" "$RESET" "$pad" "$VALUE" "$value" "$RESET"
+}
+
+section_bar() {
+    local title="$1" width="$2"
+    printf '  %b%s%b\n' "$REV" "$(pad_line "◆ ${title}" $((width-4)))" "$RESET"
+}
+
+menu_row() {
+    local i="$1" width="$2" key label key_color
+    key="${MENU_KEYS[$i]}"
+    label="${MENU_LABELS[$i]}"
+    key_color="$KEY"
+    [[ "$key" == "U" ]] && key_color="$DANGER"
+    [[ "$key" == "0" ]] && key_color="$GRAY"
+    if [[ $i -eq $MENU_SELECTED ]]; then
+        printf '  %b%s%b\n' "$REV" "$(pad_line "▸ [${key}] ${label}" $((width-4)))" "$RESET"
+    else
+        printf '  %b[%s]%b %b%s%b\n' "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET"
+    fi
+}
+
+draw_footer() {
+    local width="$1"
+    printf '  %b%s%b\n' "$PANEL" "$(repeat '─' $((width-4)))" "$RESET"
+    printf '  %b%s%b  %b%s%b\n' "$MUTED" "$TG_GROUP_NAME" "$RESET" "$PRIMARY" "$TG_GROUP_URL" "$RESET"
+    printf '  %b↑/↓ 选择%s  %bEnter 确认%s  %b数字键直达%s  %bQ 退出%s\n' \
+        "$MUTED" "$RESET" "$MUTED" "$RESET" "$MUTED" "$RESET" "$MUTED" "$RESET"
+    printf '  %b▸ %s%b %b%s%b\n' "$PRIMARY" "${MENU_LABELS[$MENU_SELECTED]}" "$RESET" "$MUTED" "${MENU_DESCS[$MENU_SELECTED]}" "$RESET"
+    echo
+}
+
+# ── 渲染 ──
+
+render_main_menu() {
+    local width
+    width=$(term_width)
+
+    # 状态数据
+    local status_badge pid_value
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        local pid
-        pid=$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null)
-        pid_value="${pid:-N/A}"
+        status_badge="${SUCCESS}● 运行中${RESET}"
+        pid_value=$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null)
+        pid_value="${pid_value:-N/A}"
+    else
+        status_badge="${DANGER}○ 已停止${RESET}"
+        pid_value="--"
     fi
+
+    local target_summary
+    get_target_summary target_summary
 
     local host_name cpu_cores mem_used mem_total disk_usage load_avg interfaces_count
     host_name=$(hostname 2>/dev/null || echo "未知")
@@ -2260,48 +2475,159 @@ show_menu() {
         last_config="${VALUE}${LAST_THREADS:-?} 线程 · ${LAST_INTERFACE:-未知} · ${short_url}${RESET}"
     fi
 
-    print_menu_section "系统概览"
-    print_status_row "服务状态" "${status_badge} ${MUTED}· PID ${pid_value}${RESET}"
-    print_status_row "流量目标" "$target_summary"
-    print_status_row "主机信息" "${VALUE}${host_name}${RESET}"
-    print_status_row "资源占用" "${VALUE}CPU ${cpu_cores} 核 · 内存 ${mem_used}/${mem_total} GB${RESET}"
-    print_status_row "存储网络" "${VALUE}${disk_usage} · ${interfaces_count} 个接口 · 负载 ${load_avg}${RESET}"
-    print_status_row "上次配置" "$last_config"
+    get_current_speed
+    local speed_text="--"
+    local speed_iface
+    speed_iface=$(list_network_interfaces | head -1)
+    [[ -n "$CURRENT_SPEED" ]] && speed_text="${CURRENT_SPEED} MB/s"
+
+    # 绘制
+    printf '\033[H'
+    draw_header "$width"
+
+    box_top "系统概览" "$width"
+    panel_row "服务状态" "${status_badge} ${MUTED}· PID ${pid_value}${RESET}"
+    panel_row "当前速率" "${VALUE}${speed_text}${RESET}${MUTED} · ${speed_iface:-无接口}${RESET}"
+    panel_row "流量目标" "$target_summary"
+    [[ -n "$TARGET_PERCENT" ]] && panel_row "" "$(gradient_bar "$TARGET_PERCENT" $((width - 42))) ${VALUE}${TARGET_PERCENT}%${RESET}"
+    panel_row "主机信息" "${VALUE}${host_name}${RESET}"
+    panel_row "资源占用" "${VALUE}CPU ${cpu_cores} 核 · 内存 ${mem_used}/${mem_total} GB${RESET}"
+    panel_row "存储网络" "${VALUE}${disk_usage} · ${interfaces_count} 个接口 · 负载 ${load_avg}${RESET}"
+    panel_row "上次配置" "$last_config"
     if [[ "$USAGE_COUNT" =~ ^[0-9]+$ ]] && [[ $USAGE_COUNT -gt 0 ]]; then
-        print_status_row "使用记录" "${VALUE}${USAGE_COUNT} 次${RESET} ${MUTED}· ${LAST_USED:-未知}${RESET}"
+        panel_row "使用记录" "${VALUE}${USAGE_COUNT} 次${RESET} ${MUTED}· ${LAST_USED:-未知}${RESET}"
     fi
+    box_bottom "$width"
     echo
 
-    print_menu_section "服务管理"
-    print_menu_item "1" "启动或重新配置"
-    print_menu_item "2" "停止服务"
-    print_menu_item "3" "重启服务"
-    print_menu_item "4" "流量目标"
+    section_bar "服务管理" "$width"
+    menu_row 0 "$width"; menu_row 1 "$width"; menu_row 2 "$width"; menu_row 3 "$width"
+    echo
+    section_bar "监控工具" "$width"
+    menu_row 4 "$width"; menu_row 5 "$width"; menu_row 6 "$width"; menu_row 7 "$width"
+    echo
+    section_bar "系统维护" "$width"
+    menu_row 8 "$width"; menu_row 9 "$width"; menu_row 10 "$width"; menu_row 11 "$width"
+    echo
+    menu_row 12 "$width"
+    draw_footer "$width"
+    printf '\033[J'
+}
+
+# ── 分发与生命周期 ──
+
+menu_exit() {
+    clear
+    echo
+    echo -e "  ${SUCCESS}已退出米粒儿 VPS 流量控制台${RESET}"
+    echo
+    exit 0
+}
+
+menu_dispatch() {
+    case "${MENU_KEYS[$MENU_SELECTED]}" in
+        1) start_service ;;
+        2) stop_service ;;
+        3) restart_service ;;
+        4) set_traffic_target ;;
+        5) show_monitor ;;
+        6) advanced_monitor ;;
+        7) test_monitor ;;
+        8) speed_test ;;
+        9) show_logs ;;
+        A) shortcut_management ;;
+        B) check_update ;;
+        U) uninstall_service ;;
+        0) menu_exit ;;
+    esac
+    # 子功能（如高级监控）可能覆盖 INT/TERM 捕获，返回后恢复
+    trap 'exit 0' INT TERM
+}
+
+menu_cleanup() {
+    tput cnorm 2>/dev/null
+    tput rmcup 2>/dev/null
+    rm -f "$MENU_SPEED_STATE"
+}
+
+show_menu() {
+    local k i
+    trap menu_cleanup EXIT
+    trap 'exit 0' INT TERM
+    trap 'MENU_RESIZED=1' WINCH
+    tput smcup 2>/dev/null || true
+    tput civis 2>/dev/null || true
+    printf '\033[H\033[J'
+    render_main_menu
+    while true; do
+        [[ $MENU_RESIZED -eq 1 ]] && { MENU_RESIZED=0; render_main_menu; }
+        k=$(menu_read_key)
+        case "$k" in
+            TIMEOUT) render_main_menu ;;    # 空闲 2 秒自动刷新状态区
+            UP)      MENU_SELECTED=$(( (MENU_SELECTED - 1 + MENU_COUNT) % MENU_COUNT )); render_main_menu ;;
+            DOWN)    MENU_SELECTED=$(( (MENU_SELECTED + 1) % MENU_COUNT )); render_main_menu ;;
+            ENTER)   menu_dispatch ;;
+            ESC)     : ;;
+            *)
+                [[ "${k^^}" == "Q" ]] && menu_exit
+                for ((i=0; i<MENU_COUNT; i++)); do
+                    if [[ "${k^^}" == "${MENU_KEYS[$i]}" ]]; then
+                        MENU_SELECTED=$i
+                        menu_dispatch
+                        break
+                    fi
+                done
+                ;;
+        esac
+    done
+}
+
+# 非交互终端降级：静态菜单 + 逐行读取
+show_menu_plain() {
+    echo
+    echo -e "  ${PRIMARY}${BOLD}米粒儿 VPS 流量控制台${RESET}  ${MUTED}${SCRIPT_VERSION}${RESET}"
+    echo -e "  ${PANEL}──────────────────────────────────────────────${RESET}"
     echo
 
-    print_menu_section "监控工具"
-    print_menu_item "5" "实时流量监控"
-    print_menu_item "6" "高级流量监控"
-    print_menu_item "7" "功能诊断"
-    print_menu_item "8" "网络测速"
-    echo
+    local target_summary
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        local pid
+        pid=$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null)
+        echo -e "  服务状态  ${SUCCESS}● 运行中${RESET} ${MUTED}· PID ${pid:-N/A}${RESET}"
+    else
+        echo -e "  服务状态  ${DANGER}○ 已停止${RESET}"
+    fi
+    get_target_summary target_summary
+    echo -e "  流量目标  ${target_summary}"
+    load_config || true
 
-    print_menu_section "系统维护"
-    print_menu_item "9" "查看服务日志"
-    print_menu_item "A" "快捷键管理"
-    print_menu_item "B" "检查脚本更新"
-    printf "  %b[U]%b %b卸载全部服务%b\n" "$DANGER" "$RESET" "$WHITE" "$RESET"
     echo
-    printf "  %b[0]%b %b退出控制台%b\n" "$GRAY" "$RESET" "$WHITE" "$RESET"
+    echo -e "  服务管理"
+    echo -e "  ${KEY}[1]${RESET} ${WHITE}启动或重新配置${RESET}"
+    echo -e "  ${KEY}[2]${RESET} ${WHITE}停止服务${RESET}"
+    echo -e "  ${KEY}[3]${RESET} ${WHITE}重启服务${RESET}"
+    echo -e "  ${KEY}[4]${RESET} ${WHITE}流量目标${RESET}"
+    echo
+    echo -e "  监控工具"
+    echo -e "  ${KEY}[5]${RESET} ${WHITE}实时流量监控${RESET}"
+    echo -e "  ${KEY}[6]${RESET} ${WHITE}高级流量监控${RESET}"
+    echo -e "  ${KEY}[7]${RESET} ${WHITE}功能诊断${RESET}"
+    echo -e "  ${KEY}[8]${RESET} ${WHITE}网络测速${RESET}"
+    echo
+    echo -e "  系统维护"
+    echo -e "  ${KEY}[9]${RESET} ${WHITE}查看服务日志${RESET}"
+    echo -e "  ${KEY}[A]${RESET} ${WHITE}快捷键管理${RESET}"
+    echo -e "  ${KEY}[B]${RESET} ${WHITE}检查脚本更新${RESET}"
+    echo -e "  ${DANGER}[U]${RESET} ${WHITE}卸载全部服务${RESET}"
+    echo
+    echo -e "  ${GRAY}[0]${RESET} ${WHITE}退出控制台${RESET}"
     echo
     echo -e "  ${PANEL}──────────────────────────────────────────────${RESET}"
-    printf "  %b%s%b  %b%s%b\n" "$MUTED" "$TG_GROUP_NAME" "$RESET" "$PRIMARY" "$TG_GROUP_URL" "$RESET"
+    echo -e "  ${MUTED}${TG_GROUP_NAME}${RESET}  ${PRIMARY}${TG_GROUP_URL}${RESET}"
     echo
 
-    local prompt_text
-    printf -v prompt_text "  %b请选择%b %b(1-9/A/B/U/0)%b %b>%b " \
-        "$LABEL" "$RESET" "$MUTED" "$RESET" "$PRIMARY" "$RESET"
-    if ! IFS= read -r -p "$prompt_text" choice; then
+    local choice
+    if ! IFS= read -r -p "  请选择 (1-9/A/B/U/0) > " choice; then
         echo
         exit 0
     fi
@@ -2321,16 +2647,12 @@ show_menu() {
         [Bb]) check_update ;;
         [Uu]) uninstall_service ;;
         0)
-            clear
             echo
             echo -e "  ${SUCCESS}已退出米粒儿 VPS 流量控制台${RESET}"
             echo
             exit 0
             ;;
-        *)
-            echo -e "  ${DANGER}无效选项${RESET}"
-            sleep 1
-            ;;
+        *) echo -e "  ${DANGER}无效选项${RESET}" ;;
     esac
 }
 
@@ -2347,7 +2669,7 @@ detect_system_type() {
 # 安装缺失的依赖
 install_missing_deps() {
     local missing_cmds=()
-    local required_commands=("curl" "systemctl" "nproc" "free" "df" "ps" "grep" "awk" "sed" "less" "bc")
+    local required_commands=("curl" "systemctl" "nproc" "free" "df" "ps" "grep" "awk" "sed" "less")
 
     # 检查缺失的命令
     for cmd in "${required_commands[@]}"; do
@@ -2364,17 +2686,17 @@ install_missing_deps() {
         case "$OS_ID" in
             ubuntu|debian|linuxmint)
                 apt-get update &>/dev/null
-                apt-get install -y curl procps coreutils systemd less bc &>/dev/null
+                apt-get install -y curl procps coreutils systemd less gawk grep sed &>/dev/null
                 ;;
             centos|rhel|fedora|rocky|almalinux)
                 if command -v yum &>/dev/null; then
-                    yum install -y curl procps-ng coreutils systemd less bc &>/dev/null
+                    yum install -y curl procps-ng coreutils systemd less gawk grep sed &>/dev/null
                 elif command -v dnf &>/dev/null; then
-                    dnf install -y curl procps-ng coreutils systemd less bc &>/dev/null
+                    dnf install -y curl procps-ng coreutils systemd less gawk grep sed &>/dev/null
                 fi
                 ;;
             arch|manjaro)
-                pacman -S --noconfirm curl procps-ng coreutils systemd less bc &>/dev/null
+                pacman -S --noconfirm curl procps-ng coreutils systemd less gawk grep sed &>/dev/null
                 ;;
         esac
 
@@ -2427,7 +2749,20 @@ check_environment() {
 check_environment
 init_service
 
-# 主循环
-while true; do
+# 记录一次控制台使用（USAGE_COUNT 按控制台启动次数统计）
+{
+    load_config || true
+    USAGE_COUNT=$(( ${USAGE_COUNT:-0} + 1 ))
+    if [[ -n "${LAST_URL:-}" ]]; then
+        save_config "$LAST_URL" "${LAST_THREADS:-1}" "${LAST_INTERFACE:-eth0}"
+    fi
+}
+
+# 主循环：交互终端使用方向键菜单，管道/重定向等非交互场景使用静态菜单
+if [[ -t 0 && -t 1 ]]; then
     show_menu
-done
+else
+    while true; do
+        show_menu_plain
+    done
+fi
