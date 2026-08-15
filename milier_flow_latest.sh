@@ -2,11 +2,11 @@
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 米粒儿VPS流量消耗管理工具 - 官方版本
-# 米粒VPS交流群：https://t.me/mlkjfx66
+# 米粒VPS交流群：https://t.me/mlvps99
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
-SCRIPT_VERSION="v3.3.0"
+SCRIPT_VERSION="v3.3.1"
 SCRIPT_NAME="milier_flow.sh"
 SERVICE_NAME="milier_flow"
 LOG_FILE="/root/milier_flow.log"
@@ -18,7 +18,7 @@ TARGET_CONFIG_FILE="/root/milier_target.conf"
 PRESET_CONFIG_FILE="/root/milier_presets.conf"
 DEFAULT_SHORTCUT="xh"
 TG_GROUP_NAME="米粒VPS交流群"
-TG_GROUP_URL="https://t.me/mlkjfx66"
+TG_GROUP_URL="https://t.me/mlvps99"
 
 # ──────────────────────────────── 专业高对比度配色 ────────────────────────────
 # 主界面只使用高亮青和白色；绿色、黄色、红色仅表达状态。

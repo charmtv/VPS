@@ -1,9 +1,9 @@
-# 🚀 米粒儿VPS流量消耗管理工具 v3.3.0
+# 🚀 米粒儿VPS流量消耗管理工具 v3.3.1
 
 [![GitHub](https://img.shields.io/badge/GitHub-charmtv/VPS-blue?logo=github)](https://github.com/charmtv/VPS)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-3.3.0-brightgreen)](https://github.com/charmtv/VPS)
+[![Version](https://img.shields.io/badge/Version-3.3.1-brightgreen)](https://github.com/charmtv/VPS)
 [![CI](https://github.com/charmtv/VPS/actions/workflows/ci.yml/badge.svg)](https://github.com/charmtv/VPS/actions/workflows/ci.yml)
 
 专业的VPS流量消耗管理工具，支持多线程并发下载、实时流量监控、流量目标管理、网络测速、系统服务集成等功能。
@@ -89,7 +89,7 @@ xh
 
   [0] 退出控制台
   ────────────────────────────────────────────
-  米粒VPS交流群  https://t.me/mlkjfx66
+  米粒VPS交流群  https://t.me/mlvps99
 ```
 
 > 菜单宽度随终端自适应；选中项整行反色高亮，底部随光标显示功能说明；空闲 2 秒自动刷新状态区。
@@ -203,6 +203,10 @@ bash /root/milier_uninstall.sh
 2. 检查网络接口：`ip link show`
 3. 检查权限：确保有读取网络统计的权限
 
+## 📌 v3.3.1 更新日志
+
+- 🔗 **交流群更新** - 米粒VPS交流群链接更换为 https://t.me/mlvps99
+
 ## 📌 v3.3 更新日志
 
 - 🕹️ **方向键交互菜单** - 主菜单与URL选择支持 ↑/↓ 选择、Enter 确认、整行反色高亮，数字键直达保留
@@ -261,7 +265,7 @@ bash /root/milier_uninstall.sh
 
 ## 📞 支持与反馈
 
-- 🔗 **米粒VPS交流群**：[https://t.me/mlkjfx66](https://t.me/mlkjfx66)
+- 🔗 **米粒VPS交流群**：[https://t.me/mlvps99](https://t.me/mlvps99)
 - 💻 **GitHub项目**：[https://github.com/charmtv/VPS](https://github.com/charmtv/VPS)
 
 ## 📜 开源协议
