@@ -4,22 +4,24 @@
 
 const GITHUB_BASE = 'https://raw.githubusercontent.com/charmtv/VPS/main';
 
-// 路由映射表（严格白名单：仅允许以下路径）
-const ROUTE_MAP = {
-  '/': '/install.sh',
-  '/install.sh': '/install.sh',
-  '/milier_flow_latest.sh': '/milier_flow_latest.sh',
-  '/README.md': '/README.md',
-};
+// 路由白名单：用 Map 而非对象字面量，避免 'constructor' 等原型链属性被误判为命中
+const ROUTE_MAP = new Map([
+  ['/', '/install.sh'],
+  ['/install.sh', '/install.sh'],
+  ['/milier_flow_latest.sh', '/milier_flow_latest.sh'],
+  ['/README.md', '/README.md'],
+]);
 
-// 改动点：按文件后缀映射 Content-Type（.sh / .md 分别返回对应类型）
+const UPSTREAM_CACHE_TTL = 60; // 秒，更新后快速生效
+
+// 按文件后缀返回对应的 Content-Type
 function contentTypeFor(path) {
   if (path.endsWith('.sh')) return 'text/plain; charset=utf-8';
   if (path.endsWith('.md')) return 'text/markdown; charset=utf-8';
   return 'application/octet-stream';
 }
 
-// 改动点：将响应体 SHA-256 摘要转为小写 hex 字符串
+// 计算响应体的 SHA-256，输出小写 hex
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest))
@@ -29,55 +31,49 @@ async function sha256Hex(text) {
 
 export default {
   async fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
+    const path = new URL(request.url).pathname;
+    const targetPath = ROUTE_MAP.get(path);
 
-    // 改动点：严格白名单，未命中直接返回 404，不再拼接任意路径
-    if (!(path in ROUTE_MAP)) {
+    if (targetPath === undefined) {
       return new Response('404 Not Found', { status: 404 });
     }
 
-    const targetPath = ROUTE_MAP[path];
-    const targetUrl = `${GITHUB_BASE}${targetPath}`;
-
     try {
-      const response = await fetch(targetUrl, {
+      const response = await fetch(`${GITHUB_BASE}${targetPath}`, {
         headers: {
           'User-Agent': 'Cloudflare-Worker-MilierVPS',
-          'Accept': 'text/plain',
+          Accept: 'text/plain',
         },
         cf: {
-          // 缓存 60 秒，更新后快速生效
-          cacheTtl: 60,
+          cacheTtl: UPSTREAM_CACHE_TTL,
           cacheEverything: true,
         },
       });
 
-      // 改动点：上游状态透传（404→404；>=500→502；其余非 ok 保持原状态）
+      // 上游状态透传：404 保持 404，5xx 归一为 502，其余保留原状态码
       if (!response.ok) {
         const status = response.status >= 500 ? 502 : response.status;
-        const text = status === 404 ? '404 Not Found'
+        const text =
+          status === 404 ? '404 Not Found'
           : status === 502 ? '502 Bad Gateway'
           : `Upstream Error ${status}`;
         return new Response(text, { status });
       }
 
       const body = await response.text();
-
-      // 改动点：计算 SHA-256 并以 X-SHA256 响应头返回
       const checksum = await sha256Hex(body);
 
       return new Response(body, {
         status: 200,
         headers: {
           'Content-Type': contentTypeFor(targetPath),
-          'Cache-Control': 'public, max-age=60',
+          'Cache-Control': `public, max-age=${UPSTREAM_CACHE_TTL}`,
           'X-Powered-By': 'MilierVPS-CDN',
           'Access-Control-Allow-Origin': '*',
           'X-SHA256': checksum,
         },
       });
-    } catch (err) {
+    } catch {
       return new Response('Service Unavailable', { status: 502 });
     }
   },
