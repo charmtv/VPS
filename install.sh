@@ -30,13 +30,13 @@ REQUIRED_COMMANDS=(curl systemctl nproc free df ps grep awk sed)
 # ──────────────────────────────── 输出helpers ─────────────────────────────────
 
 error_exit() {
-    printf '  %b❌ %s%b\n' "$DANGER" "$1" "$RESET" >&2
+    printf '  %b[X] %s%b\n' "$DANGER" "$1" "$RESET" >&2
     exit 1
 }
 
-success_msg() { printf '  %b✅ %s%b\n' "$SUCCESS" "$1" "$RESET"; }
+success_msg() { printf '  %b[OK] %s%b\n' "$SUCCESS" "$1" "$RESET"; }
 info_msg()    { printf '  %b%s%b\n'   "$INFO" "$1" "$RESET"; }
-warning_msg() { printf '  %b⚠️  %s%b\n' "$WARNING" "$1" "$RESET"; }
+warning_msg() { printf '  %b[!] %s%b\n' "$WARNING" "$1" "$RESET"; }
 note_msg()    { printf '  %b%s%b\n'   "$MUTED" "$1" "$RESET"; }
 
 # ──────────────────────────────── 系统检测 ────────────────────────────────────

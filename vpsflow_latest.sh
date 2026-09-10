@@ -53,11 +53,43 @@ UI_MIN_WIDTH=60           # 最小可用宽度，窄于此值按此值排版
 UI_MAX_WIDTH=96           # 最大排版宽度，超宽终端不再拉伸，避免视线跨度过大
 UI_INDENT="  "            # 全局左边距
 
+# ── 字形集 ──
+# 制表符（U+2500 等）、实心圆、方块在不少 VPS 终端的字体里缺字，会渲染成空白或
+# 方框，导致分隔线整条看不见。默认因此使用纯 ASCII 字形，保证任何终端都能正确
+# 显示；确认字体支持时可设 VPSFLOW_UNICODE=1 切换到线框字形。
+if [[ "${VPSFLOW_UNICODE:-0}" == "1" ]]; then
+    G_RULE="─"; G_CURSOR="▸"; G_SEP="·"
+    G_RUN="●";  G_STOP="○";   G_DOWN="↓"; G_UP="↑"
+    G_BAR_FULL="█"; G_BAR_EMPTY="░"
+    G_OK="✅"; G_WARN="⚠️ "; G_ERR="❌"
+    G_KEY_UPDOWN="↑↓"
+    # 趋势图由低到高六级
+    G_CHART_0="▁"; G_CHART_1="▂"; G_CHART_2="▃"
+    G_CHART_3="▅"; G_CHART_4="▆"; G_CHART_5="▇"
+else
+    G_RULE="-"; G_CURSOR=">"; G_SEP="|"
+    G_RUN="*";  G_STOP="o";   G_DOWN="v"; G_UP="^"
+    G_BAR_FULL="#"; G_BAR_EMPTY="."
+    G_OK="[OK]"; G_WARN="[!]"; G_ERR="[X]"
+    G_KEY_UPDOWN="上下键"
+    G_CHART_0="_"; G_CHART_1="."; G_CHART_2=":"
+    G_CHART_3="+"; G_CHART_4="*"; G_CHART_5="#"
+fi
+
+# 行尾清除：整屏重绘时把本行残留的旧内容擦掉。
+# 缺了它，重绘出的较短行会留下上一帧的尾巴（例如反色条残块）。
+CLREOL="\e[K"
+
 # 是否为 UTF-8 终端，启动时判定一次，避免 str_width 每次调用都做 case 匹配
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
     *UTF-8*|*utf-8*|*UTF8*|*utf8*) UI_UTF8=1 ;;
     *) UI_UTF8=0 ;;
 esac
+
+# 非交互输出或简易终端下不发送任何控制码
+if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
+    CLREOL=""
+fi
 
 # 重复字符 n 次
 repeat() {
@@ -95,7 +127,7 @@ ui_inner() {
 str_width() {
     local s="$1"
     s="${s//$'\e'[[]*([0-9;])m/}"
-    s="${s//\e[[]*([0-9;])m/}"
+    s="${s//\\e[[]*([0-9;])m/}"
     if (( UI_UTF8 == 0 )); then
         printf '%d' "${#s}"
         return 0
@@ -122,23 +154,28 @@ pad_line() {
     printf '%s%s' "$text" "$(repeat ' ' "$pad")"
 }
 
+# 空行（同样清到行尾）
+ui_blank() {
+    printf '%b\n' "$CLREOL"
+}
+
 # 一行两栏：左对齐 + 右对齐，中间自动撑开
 ui_split() {
     local left="$1" right="$2" width gap
     width="${3:-$(ui_width)}"
     if [[ -z "$right" ]]; then
-        printf '%s%b\n' "$UI_INDENT" "$left"
+        printf '%s%b%b\n' "$UI_INDENT" "$left" "$CLREOL"
         return 0
     fi
     gap=$(( width - 4 - $(str_width "$left") - $(str_width "$right") ))
     (( gap < 2 )) && gap=2
-    printf '%s%b%s%b\n' "$UI_INDENT" "$left" "$(repeat ' ' "$gap")" "$right"
+    printf '%s%b%s%b%b\n' "$UI_INDENT" "$left" "$(repeat ' ' "$gap")" "$right" "$CLREOL"
 }
 
 # 细分隔线
 ui_rule() {
     local width="${1:-$(ui_width)}"
-    printf '%s%b%s%b\n' "$UI_INDENT" "$PANEL" "$(repeat '─' $((width-4)))" "$RESET"
+    printf '%s%b%s%b%b\n' "$UI_INDENT" "$PANEL" "$(repeat "$G_RULE" $((width-4)))" "$RESET" "$CLREOL"
 }
 
 # 页面标题：左侧标题，右侧版本号，下方分隔线
@@ -162,7 +199,7 @@ ui_kv() {
     local label="$1" value="$2" pad
     pad=$(( 10 - $(str_width "$label") ))
     (( pad < 1 )) && pad=1
-    printf '%s%b%s%b%s%b\n' "$UI_INDENT" "$MUTED" "$label" "$RESET" "$(repeat ' ' "$pad")" "$value"
+    printf '%s%b%s%b%s%b%b\n' "$UI_INDENT" "$MUTED" "$label" "$RESET" "$(repeat ' ' "$pad")" "$value" "$CLREOL"
 }
 
 # 选项行：[键] 标签 + 右侧说明
@@ -171,29 +208,30 @@ ui_item() {
     pad=$(( 24 - $(str_width "$label") ))
     (( pad < 2 )) && pad=2
     if [[ -z "$hint" ]]; then
-        printf '%s  %b[%s]%b %b%s%b\n' "$UI_INDENT" "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET"
+        printf '%s  %b[%s]%b %b%s%b%b\n' "$UI_INDENT" "$key_color" "$key" "$RESET" \
+            "$WHITE" "$label" "$RESET" "$CLREOL"
     else
-        printf '%s  %b[%s]%b %b%s%b%s%b%s%b\n' "$UI_INDENT" "$key_color" "$key" "$RESET" \
-            "$WHITE" "$label" "$RESET" "$(repeat ' ' "$pad")" "$MUTED" "$hint" "$RESET"
+        printf '%s  %b[%s]%b %b%s%b%s%b%s%b%b\n' "$UI_INDENT" "$key_color" "$key" "$RESET" \
+            "$WHITE" "$label" "$RESET" "$(repeat ' ' "$pad")" "$MUTED" "$hint" "$RESET" "$CLREOL"
     fi
 }
 
 # 分组小标题
 ui_group() {
-    printf '%s%b%s%b\n' "$UI_INDENT" "$PRIMARY" "$1" "$RESET"
+    printf '%s%b%s%b%b\n' "$UI_INDENT" "$PRIMARY" "$1" "$RESET" "$CLREOL"
 }
 
 # 状态消息
-ui_ok()   { printf '%s%b✅ %s%b\n' "$UI_INDENT" "$SUCCESS" "$1" "$RESET"; }
-ui_warn() { printf '%s%b⚠️  %s%b\n' "$UI_INDENT" "$WARNING" "$1" "$RESET"; }
-ui_err()  { printf '%s%b❌ %s%b\n' "$UI_INDENT" "$DANGER" "$1" "$RESET"; }
-ui_info() { printf '%s%b%s%b\n' "$UI_INDENT" "$INFO" "$1" "$RESET"; }
-ui_note() { printf '%s%b%s%b\n' "$UI_INDENT" "$MUTED" "$1" "$RESET"; }
-ui_step() { printf '%s%b▸%b %b%s%b\n' "$UI_INDENT" "$PRIMARY" "$RESET" "$WHITE" "$1" "$RESET"; }
+ui_ok()   { printf '%s%b%s %s%b%b\n' "$UI_INDENT" "$SUCCESS" "$G_OK"   "$1" "$RESET" "$CLREOL"; }
+ui_warn() { printf '%s%b%s %s%b%b\n' "$UI_INDENT" "$WARNING" "$G_WARN" "$1" "$RESET" "$CLREOL"; }
+ui_err()  { printf '%s%b%s %s%b%b\n' "$UI_INDENT" "$DANGER"  "$G_ERR"  "$1" "$RESET" "$CLREOL"; }
+ui_info() { printf '%s%b%s%b%b\n'    "$UI_INDENT" "$INFO" "$1" "$RESET" "$CLREOL"; }
+ui_note() { printf '%s%b%s%b%b\n'    "$UI_INDENT" "$MUTED" "$1" "$RESET" "$CLREOL"; }
+ui_step() { printf '%s%b%s%b %b%s%b%b\n' "$UI_INDENT" "$PRIMARY" "$G_CURSOR" "$RESET" "$WHITE" "$1" "$RESET" "$CLREOL"; }
 
 # 底部操作提示
 ui_keyhint() {
-    printf '%s%b%s%b\n' "$UI_INDENT" "$MUTED" "$1" "$RESET"
+    printf '%s%b%s%b%b\n' "$UI_INDENT" "$MUTED" "$1" "$RESET" "$CLREOL"
 }
 
 # 等待回车；非交互输入时直接返回，避免卡死
@@ -234,13 +272,14 @@ gradient_bar() {
             if (( percent >= 80 )); then c="$DANGER"
             elif (( percent >= 50 )); then c="$WARNING"
             else c="$SUCCESS"; fi
-            printf '%b█%b' "$c" "$RESET"
+            printf '%b%s%b' "$c" "$G_BAR_FULL" "$RESET"
         else
-            printf '%b░%b' "$MUTED" "$RESET"
+            printf '%b%s%b' "$MUTED" "$G_BAR_EMPTY" "$RESET"
         fi
     done
     printf '%b]%b' "$PANEL" "$RESET"
 }
+
 
 # ──────────────────────────────── 下载源与更新源 ──────────────────────────────
 # 下载源表：名称 / 说明 / URL 三个数组下标一一对应，菜单与实际取值共用同一份数据
@@ -331,14 +370,14 @@ safe_source_config() {
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
         if [[ ! "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=\"([^\"]*)\"[[:space:]]*$ ]]; then
-            echo -e "${WARNING}⚠️  配置文件格式异常，已跳过：$file${RESET}" >&2
+            echo -e "${WARNING}${G_WARN} 配置文件格式异常，已跳过：$file${RESET}" >&2
             return 1
         fi
 
         key="${BASH_REMATCH[1]}"
         value="${BASH_REMATCH[2]}"
         if [[ "$allowed" != *" $key "* ]] || ! is_safe_config_value "$value"; then
-            echo -e "${WARNING}⚠️  配置文件包含不允许的内容，已跳过：$file${RESET}" >&2
+            echo -e "${WARNING}${G_WARN} 配置文件包含不允许的内容，已跳过：$file${RESET}" >&2
             return 1
         fi
     done < "$file"
@@ -482,10 +521,10 @@ get_target_summary() {
     local __var="$1" mode="${2:-full}" summary consumed_gb auto_stop
     if target_progress; then
         consumed_gb=$(awk -v b="$TARGET_CONSUMED_BYTES" 'BEGIN { printf "%.2f", b / 1073741824 }')
-        summary="${VALUE}${consumed_gb}${RESET}${MUTED} / ${RESET}${VALUE}${TARGET_GB} GB${RESET} ${MUTED}·${RESET} ${VALUE}${TARGET_PERCENT}%${RESET}"
+        summary="${VALUE}${consumed_gb}${RESET}${MUTED} / ${RESET}${VALUE}${TARGET_GB} GB${RESET} ${MUTED}${G_SEP}${RESET} ${VALUE}${TARGET_PERCENT}%${RESET}"
         if [[ "$mode" != "compact" ]]; then
-            auto_stop="${MUTED}· 自动停止 关${RESET}"
-            [[ "${TARGET_AUTO_STOP:-false}" == "true" ]] && auto_stop="${SUCCESS}· 自动停止 开${RESET}"
+            auto_stop="${MUTED}${G_SEP} 自动停止 关${RESET}"
+            [[ "${TARGET_AUTO_STOP:-false}" == "true" ]] && auto_stop="${SUCCESS}${G_SEP} 自动停止 开${RESET}"
             summary="${summary} ${auto_stop}"
         fi
     else
@@ -552,12 +591,12 @@ validate_threads() {
     local max_threads=$((max_cores * 4))
 
     if ! [[ "$threads" =~ ^[1-9][0-9]*$ ]]; then
-        echo -e "${DANGER}  ❌ 线程数必须为正整数${RESET}"
+        echo -e "${DANGER}  ${G_ERR} 线程数必须为正整数${RESET}"
         return 1
     fi
 
     if [[ $threads -gt $max_threads ]]; then
-        echo -e "${WARNING}  ⚠️  线程数过高（推荐最大：$max_threads），可能影响系统性能${RESET}"
+        echo -e "${WARNING}  ${G_WARN} 线程数过高（推荐最大：$max_threads），可能影响系统性能${RESET}"
         read -r -p "  是否继续？(y/N)：" confirm
         [[ "$confirm" =~ ^[Yy]$ ]] || return 1
     fi
@@ -569,7 +608,7 @@ validate_threads() {
 save_config() {
     local url="$1" threads="$2" interface="$3"
     validate_url "$url" || {
-        echo -e "${DANGER}❌ URL 格式不安全，配置未保存${RESET}"
+        echo -e "${DANGER}${G_ERR} URL 格式不安全，配置未保存${RESET}"
         return 1
     }
     [[ "$threads" =~ ^[1-9][0-9]*$ ]] || return 1
@@ -634,7 +673,7 @@ EOF
     chmod +x "$shortcut_path"
     if check_command "创建快捷键失败"; then
         save_shortcut_config "$shortcut_name"
-        echo -e "${SUCCESS}✅ 快捷键设置成功！现在可以使用 ${PRIMARY}$shortcut_name${RESET} ${SUCCESS}命令启动工具${RESET}"
+        echo -e "${SUCCESS}${G_OK} 快捷键设置成功！现在可以使用 ${PRIMARY}$shortcut_name${RESET} ${SUCCESS}命令启动工具${RESET}"
     fi
 }
 
@@ -900,6 +939,15 @@ create_monitor_script() {
 INTERFACE=$1
 
 # ── 配色（与主控制台保持一致） ──
+# 字形集：与主控制台一致，默认 ASCII，VPSFLOW_UNICODE=1 切换线框字形
+if [[ "${VPSFLOW_UNICODE:-0}" == "1" ]]; then
+    G_RULE="─"; G_SEP="·"; G_DOWN="↓"; G_UP="↑"
+    G_BAR_FULL="█"; G_BAR_EMPTY="░"
+else
+    G_RULE="-"; G_SEP="|"; G_DOWN="v"; G_UP="^"
+    G_BAR_FULL="#"; G_BAR_EMPTY="."
+fi
+
 PRIMARY="\e[96m"; SUCCESS="\e[92m"; WARNING="\e[93m"; DANGER="\e[91m"
 INFO="\e[96m"; WHITE="\e[97m"; MUTED="\e[37m"; PANEL="\e[37m"
 VALUE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
@@ -910,7 +958,7 @@ if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
 fi
 
 die() {
-    printf '  %b❌ %s%b\n' "$DANGER" "$1" "$RESET" >&2
+    printf '  %b[X] %s%b\n' "$DANGER" "$1" "$RESET" >&2
     [[ -t 0 ]] && read -r -p "  按回车继续..."
     exit 1
 }
@@ -942,7 +990,9 @@ repeat() {
     printf '%s' "${out// /$ch}"
 }
 
-rule() { printf '  %b%s%b\n' "$PANEL" "$(repeat '─' $(( $(ui_width) - 4 )))" "$RESET"; }
+rule()  { printf '  %b%s%b\e[K\n' "$PANEL" "$(repeat "$G_RULE" $(( $(ui_width) - 4 )))" "$RESET"; }
+# 空行同样清到行尾：布局行数变化时（例如目标进度出现/消失）不会留下上一帧的残字
+blank() { printf '\e[K\n'; }
 
 # 速率格式化：统一保留两位小数
 format_speed() {
@@ -983,8 +1033,8 @@ draw_bar() {
     (( fill > width )) && fill=$width
     (( fill < 0 )) && fill=0
     printf '%b[%b' "$PANEL" "$RESET"
-    printf '%b%s%b' "$PRIMARY" "$(repeat '█' "$fill")" "$RESET"
-    printf '%b%s%b' "$MUTED" "$(repeat '░' $((width - fill)))" "$RESET"
+    printf '%b%s%b' "$PRIMARY" "$(repeat "$G_BAR_FULL" "$fill")" "$RESET"
+    printf '%b%s%b' "$MUTED" "$(repeat "$G_BAR_EMPTY" $((width - fill)))" "$RESET"
     printf '%b]%b' "$PANEL" "$RESET"
 }
 
@@ -1024,9 +1074,9 @@ show_target_progress() {
     (( percent > 100 )) && percent=100
 
     rule
-    printf '  %b目标%b   %b%s%b%b / %s GB · %d%%%b  %s\n' \
+    printf '  %b目标%b   %b%s%b%b / %s GB %s %d%%%b  %s\e[K\n' \
         "$MUTED" "$RESET" "$VALUE" "$consumed_gb" "$RESET" \
-        "$MUTED" "$TARGET_GB" "$percent" "$RESET" "$(draw_bar "$percent" 100 20)"
+        "$MUTED" "$TARGET_GB" "$G_SEP" "$percent" "$RESET" "$(draw_bar "$percent" 100 20)"
 }
 
 # ── 初始化 ──
@@ -1079,34 +1129,34 @@ while true; do
     (( BAR_LEN < 16 )) && BAR_LEN=16
 
     HOURS=$((DURATION / 3600)); MINS=$(((DURATION % 3600) / 60)); SECS=$((DURATION % 60))
-    HEADER_RIGHT=$(printf '%s · %02d:%02d:%02d' "$INTERFACE" "$HOURS" "$MINS" "$SECS")
+    HEADER_RIGHT=$(printf '%s %s %02d:%02d:%02d' "$INTERFACE" "$G_SEP" "$HOURS" "$MINS" "$SECS")
     GAP=$(( WIDTH - 4 - 12 - ${#HEADER_RIGHT} ))
     (( GAP < 2 )) && GAP=2
 
     # ── 整屏重绘 ──
     printf '\033[H'
-    echo
-    printf '  %b%b实时流量监控%b%s%b%s%b\n' "$WHITE" "$BOLD" "$RESET" \
+    blank
+    printf '  %b%b实时流量监控%b%s%b%s%b\e[K\n' "$WHITE" "$BOLD" "$RESET" \
         "$(repeat ' ' "$GAP")" "$MUTED" "$HEADER_RIGHT" "$RESET"
     rule
-    echo
+    blank
 
-    printf '  %b↓ 下载%b  %b%-12s%b  %s\n' "$SUCCESS" "$RESET" "$VALUE" \
+    printf '  %b%s 下载%b  %b%-12s%b  %s\e[K\n' "$SUCCESS" "$G_DOWN" "$RESET" "$VALUE" \
         "$(format_speed "$RX_RATE")" "$RESET" "$(draw_bar "$RX_RATE" "$MAX_SPEED" "$BAR_LEN")"
-    printf '  %b        累计 %s · 平均 %s · 峰值 %s%b\n' "$MUTED" \
-        "$(format_total "$RX_TOTAL")" "$(format_speed "$AVG_RX")" "$(format_speed "$RX_PEAK")" "$RESET"
-    echo
+    printf '  %b        累计 %s %s 平均 %s %s 峰值 %s%b\e[K\n' "$MUTED" \
+        "$(format_total "$RX_TOTAL")" "$G_SEP" "$(format_speed "$AVG_RX")" "$G_SEP" "$(format_speed "$RX_PEAK")" "$RESET"
+    blank
 
-    printf '  %b↑ 上传%b  %b%-12s%b  %s\n' "$WARNING" "$RESET" "$VALUE" \
+    printf '  %b%s 上传%b  %b%-12s%b  %s\e[K\n' "$WARNING" "$G_UP" "$RESET" "$VALUE" \
         "$(format_speed "$TX_RATE")" "$RESET" "$(draw_bar "$TX_RATE" "$MAX_SPEED" "$BAR_LEN")"
-    printf '  %b        累计 %s · 平均 %s · 峰值 %s%b\n' "$MUTED" \
-        "$(format_total "$TX_TOTAL")" "$(format_speed "$AVG_TX")" "$(format_speed "$TX_PEAK")" "$RESET"
-    echo
+    printf '  %b        累计 %s %s 平均 %s %s 峰值 %s%b\e[K\n' "$MUTED" \
+        "$(format_total "$TX_TOTAL")" "$G_SEP" "$(format_speed "$AVG_TX")" "$G_SEP" "$(format_speed "$TX_PEAK")" "$RESET"
+    blank
 
     show_target_progress
 
     rule
-    printf '  %bQ / ESC / Ctrl+C 退出监控%b\n' "$MUTED" "$RESET"
+    printf '  %bQ / ESC / Ctrl+C 退出监控%b\e[K\n' "$MUTED" "$RESET"
     printf '\033[J'
 
     # 按键退出
@@ -1145,7 +1195,7 @@ pkill -f vpsflow_check 2>/dev/null
 pkill -f "curl -A VPSFlow" 2>/dev/null
 crontab -l 2>/dev/null | grep -v "vpsflow_target_check.sh" | crontab - 2>/dev/null
 rm -f "$MONITOR_SCRIPT" "$UNINSTALL_SCRIPT" "$LOG_FILE" "$CONFIG_FILE" "$SHORTCUT_CONFIG" "$TARGET_CONFIG_FILE" "$PRESET_CONFIG_FILE" "/root/vpsflow_start.sh" "/root/vpsflow_target_check.sh" "/root/$SCRIPT_NAME" "/root/vpsflow_monitor_data.log" /tmp/vpsflow_latest_check.* /tmp/vpsflow_* 2>/dev/null
-echo -e "\${SUCCESS}✅ 卸载完成\${RESET}"
+echo -e "\${SUCCESS}[OK] 卸载完成\${RESET}"
 EOF
     chmod +x "$UNINSTALL_SCRIPT"
 }
@@ -1156,7 +1206,7 @@ init_service() {
         return 0
     fi
 
-    echo -e "${WARNING}⚠️  正在初始化服务...${RESET}"
+    echo -e "${WARNING}${G_WARN} 正在初始化服务...${RESET}"
 
     # 检查系统权限
     if [[ $EUID -ne 0 ]]; then
@@ -1195,7 +1245,7 @@ init_service() {
         create_shortcut "$DEFAULT_SHORTCUT"
     fi
 
-    echo -e "${SUCCESS}✅ 初始化完成${RESET}"
+    echo -e "${SUCCESS}${G_OK} 初始化完成${RESET}"
 }
 
 # ──────────────────────────────── 服务管理函数 ──────────────────────────────────
@@ -1247,7 +1297,7 @@ select_url_choice() {
 
         echo
         ui_rule
-        ui_keyhint "↑↓ 选择 · Enter 确认 · 数字直达 · Q 返回"
+        ui_keyhint "${G_KEY_UPDOWN} 选择 ${G_SEP} Enter 确认 ${G_SEP} 数字直达 ${G_SEP} Q 返回"
 
         k=$(menu_read_key)
         case "$k" in
@@ -1284,7 +1334,7 @@ url_row() {
     pad=$(( width - 2 - $(str_width "$plain") ))
     (( pad < 0 )) && pad=0
     if [[ "$num" == "$cur" ]]; then
-        printf '%s%b▸ %s%s%b\n' "$UI_INDENT" "$REV" "$plain" "$(repeat ' ' "$pad")" "$RESET"
+        printf '%s%b%s %s%s%b%b\n' "$UI_INDENT" "$REV" "$G_CURSOR" "$plain" "$(repeat ' ' "$pad")" "$RESET" "$CLREOL"
     elif [[ -z "$hint" ]]; then
         printf '%s  %b[%s]%b %b%s%b\n' "$UI_INDENT" "$KEY" "$num" "$RESET" "$WHITE" "$name" "$RESET"
     else
@@ -1338,7 +1388,7 @@ start_service() {
 
     echo
     ui_rule
-    ui_kv "确认" "${VALUE}${threads}${RESET} 线程 ${MUTED}·${RESET} ${VALUE}${url}${RESET}"
+    ui_kv "确认" "${VALUE}${threads}${RESET} 线程 ${MUTED}${G_SEP}${RESET} ${VALUE}${url}${RESET}"
     echo
     ui_ask confirm "确认启动？(Y/n)" "Y"
     [[ "$confirm" =~ ^[Nn]$ ]] && return
@@ -1461,7 +1511,7 @@ show_logs() {
     fi
 
     ui_page "服务日志"
-    ui_note "显示最近 100 行 · 按 q 退出"
+    ui_note "显示最近 100 行 ${G_SEP} 按 q 退出"
     echo
     if command -v less &>/dev/null; then
         tail -100 "$LOG_FILE" | less -R
@@ -1657,7 +1707,7 @@ advanced_monitor() {
 
     echo
     ui_ok "配置完成，正在启动高级监控"
-    ui_note "按 Q 或 Ctrl+C 退出 · 按 s 保存数据 · 按 r 重置统计"
+    ui_note "按 Q 或 Ctrl+C 退出 ${G_SEP} 按 s 保存数据 ${G_SEP} 按 r 重置统计"
     sleep 1
 
     advanced_monitor_loop "$interface" "$refresh_interval" \
@@ -1688,7 +1738,7 @@ advanced_monitor_loop() {
     clear
     echo
     ui_title "高级流量监控"
-    ui_kv "接口" "${VALUE}${interface}${RESET}${MUTED} · 刷新 ${refresh_interval}s${RESET}"
+    ui_kv "接口" "${VALUE}${interface}${RESET}${MUTED} ${G_SEP} 刷新 ${refresh_interval}s${RESET}"
     echo
     ui_note "正在采样，请稍候..."
     echo
@@ -1745,12 +1795,12 @@ advanced_monitor_loop() {
         # 阈值检查
         local alert_msg=""
         if [[ $dl_threshold -gt 0 ]] && [[ $RX_RATE -gt $dl_threshold ]]; then
-            alert_msg="${DANGER}⚠️ 下载速度超过阈值！${RESET}"
+            alert_msg="${DANGER}${G_WARN} 下载速度超过阈值！${RESET}"
             ((ALERT_COUNT++))
         fi
 
         if [[ $ul_threshold -gt 0 ]] && [[ $TX_RATE -gt $ul_threshold ]]; then
-            alert_msg="${alert_msg} ${DANGER}⚠️ 上传速度超过阈值！${RESET}"
+            alert_msg="${alert_msg} ${DANGER}${G_WARN} 上传速度超过阈值！${RESET}"
             ((ALERT_COUNT++))
         fi
 
@@ -1786,23 +1836,23 @@ advanced_monitor_loop() {
         # 显示界面
         # 显示界面：整屏定位重绘，避免闪烁
         printf '\033[H'
-        echo
+        ui_blank
         ui_title "高级流量监控"
-        ui_kv "接口" "${VALUE}${interface}${RESET}${MUTED} · 刷新 ${refresh_interval}s · 运行 $(printf '%02d:%02d:%02d' "$hours" "$mins" "$secs")${RESET}"
+        ui_kv "接口" "${VALUE}${interface}${RESET}${MUTED} ${G_SEP} 刷新 ${refresh_interval}s ${G_SEP} 运行 $(printf '%02d:%02d:%02d' "$hours" "$mins" "$secs")${RESET}"
         ui_rule
-        echo
+        ui_blank
 
-        printf '%s%b下载%b  %b%s%b  %b%s%b\n' "$UI_INDENT" "$SUCCESS" "$RESET" \
-            "$VALUE" "$(pad_line "$rx_speed" 12)" "$RESET" "$PRIMARY" "$rx_bar" "$RESET"
-        printf '%s%b上传%b  %b%s%b  %b%s%b\n' "$UI_INDENT" "$INFO" "$RESET" \
-            "$VALUE" "$(pad_line "$tx_speed" 12)" "$RESET" "$PRIMARY" "$tx_bar" "$RESET"
-        echo
+        printf '%s%b%s 下载%b  %b%s%b  %b%s%b%b\n' "$UI_INDENT" "$SUCCESS" "$G_DOWN" "$RESET" \
+            "$VALUE" "$(pad_line "$rx_speed" 12)" "$RESET" "$PRIMARY" "$rx_bar" "$RESET" "$CLREOL"
+        printf '%s%b%s 上传%b  %b%s%b  %b%s%b%b\n' "$UI_INDENT" "$INFO" "$G_UP" "$RESET" \
+            "$VALUE" "$(pad_line "$tx_speed" 12)" "$RESET" "$PRIMARY" "$tx_bar" "$RESET" "$CLREOL"
+        ui_blank
 
-        ui_kv "累计" "${MUTED}↓${RESET} ${VALUE}$(pad_line "$rx_total" 14)${RESET}${MUTED}↑${RESET} ${VALUE}${tx_total}${RESET}"
-        ui_kv "平均" "${MUTED}↓${RESET} ${VALUE}$(pad_line "$avg_rx_speed" 14)${RESET}${MUTED}↑${RESET} ${VALUE}${avg_tx_speed}${RESET}"
+        ui_kv "累计" "${MUTED}${G_DOWN}${RESET} ${VALUE}$(pad_line "$rx_total" 14)${RESET}${MUTED}${G_UP}${RESET} ${VALUE}${tx_total}${RESET}"
+        ui_kv "平均" "${MUTED}${G_DOWN}${RESET} ${VALUE}$(pad_line "$avg_rx_speed" 14)${RESET}${MUTED}${G_UP}${RESET} ${VALUE}${avg_tx_speed}${RESET}"
         if [[ -n "$RX_PEAK_TIME" || -n "$TX_PEAK_TIME" ]]; then
-            ui_kv "峰值" "${MUTED}↓${RESET} ${VALUE}$(pad_line "$rx_peak_speed" 14)${RESET}${MUTED}↑${RESET} ${VALUE}${tx_peak_speed}${RESET}"
-            ui_kv "" "${MUTED}↓ ${RX_PEAK_TIME:--} · ↑ ${TX_PEAK_TIME:--}${RESET}"
+            ui_kv "峰值" "${MUTED}${G_DOWN}${RESET} ${VALUE}$(pad_line "$rx_peak_speed" 14)${RESET}${MUTED}${G_UP}${RESET} ${VALUE}${tx_peak_speed}${RESET}"
+            ui_kv "" "${MUTED}${G_DOWN} ${RX_PEAK_TIME:--} ${G_SEP} ${G_UP} ${TX_PEAK_TIME:--}${RESET}"
         fi
         (( ALERT_COUNT > 0 )) && ui_kv "告警" "${DANGER}${ALERT_COUNT} 次${RESET}"
 
@@ -1818,7 +1868,7 @@ advanced_monitor_loop() {
 
         echo
         ui_rule
-        ui_keyhint "Q 退出 · S 保存数据 · R 重置统计"
+        ui_keyhint "Q 退出 ${G_SEP} S 保存数据 ${G_SEP} R 重置统计"
         printf '\033[J'
 
         # 键盘控制：s 保存数据 / r 重置统计 / q 退出
@@ -1888,8 +1938,8 @@ generate_bar() {
     (( fill < 0 )) && fill=0
 
     printf "["
-    for ((i=0; i<fill; i++)); do printf "█"; done
-    for ((i=fill; i<width; i++)); do printf "░"; done
+    for ((i=0; i<fill; i++)); do printf '%s' "$G_BAR_FULL"; done
+    for ((i=fill; i<width; i++)); do printf '%s' "$G_BAR_EMPTY"; done
     printf "]"
 }
 
@@ -1915,12 +1965,12 @@ display_ascii_chart() {
         [[ $bar_height -eq 0 ]] && [[ $val -gt 0 ]] && bar_height=1
 
         case $bar_height in
-            0) printf "▁" ;;
-            1) printf "▂" ;;
-            2) printf "▃" ;;
-            3) printf "▅" ;;
-            4) printf "▆" ;;
-            *) printf "▇" ;;
+            0) printf '%s' "$G_CHART_0" ;;
+            1) printf '%s' "$G_CHART_1" ;;
+            2) printf '%s' "$G_CHART_2" ;;
+            3) printf '%s' "$G_CHART_3" ;;
+            4) printf '%s' "$G_CHART_4" ;;
+            *) printf '%s' "$G_CHART_5" ;;
         esac
     done
     echo -e "${RESET}"
@@ -1953,7 +2003,7 @@ save_monitor_data() {
         echo
     } >> "$data_file"
 
-    echo -e "${SUCCESS}✅ 数据已保存到: $data_file${RESET}"
+    echo -e "${SUCCESS}${G_OK} 数据已保存到: $data_file${RESET}"
 }
 
 # 比较语义版本号，仅当候选版本更高时返回成功。
@@ -2154,11 +2204,11 @@ set_traffic_target() {
 
         if target_progress; then
             consumed_gb=$(awk -v b="$TARGET_CONSUMED_BYTES" 'BEGIN { printf "%.2f", b / 1073741824 }')
-            ui_kv "目标" "${VALUE}${TARGET_GB} GB${RESET}${MUTED} · 网卡 ${TARGET_INTERFACE:-未知}${RESET}"
-            ui_kv "已消耗" "${VALUE}${consumed_gb} GB${RESET}${MUTED} · ${TARGET_PERCENT}%${RESET}"
+            ui_kv "目标" "${VALUE}${TARGET_GB} GB${RESET}${MUTED} ${G_SEP} 网卡 ${TARGET_INTERFACE:-未知}${RESET}"
+            ui_kv "已消耗" "${VALUE}${consumed_gb} GB${RESET}${MUTED} ${G_SEP} ${TARGET_PERCENT}%${RESET}"
             ui_kv "设置于" "${VALUE}${TARGET_SET_TIME:-未知}${RESET}"
             if [[ "${TARGET_AUTO_STOP:-false}" == "true" ]]; then
-                ui_kv "自动停止" "${SUCCESS}已开启${RESET}${MUTED} · 每 5 分钟检查一次${RESET}"
+                ui_kv "自动停止" "${SUCCESS}已开启${RESET}${MUTED} ${G_SEP} 每 5 分钟检查一次${RESET}"
             else
                 ui_kv "自动停止" "${MUTED}已关闭${RESET}"
             fi
@@ -2251,7 +2301,7 @@ set_traffic_target() {
 # 网络速度测试
 speed_test() {
     ui_page "网络测速"
-    ui_kv "测试源" "${VALUE}香港 Datapacket${RESET}${MUTED} · 4 并发 × 10MB${RESET}"
+    ui_kv "测试源" "${VALUE}香港 Datapacket${RESET}${MUTED} ${G_SEP} 4 并发 x 10MB${RESET}"
     echo
     ui_step "正在测试下载速度..."
 
@@ -2557,7 +2607,7 @@ menu_row() {
     if (( idx == MENU_SELECTED )); then
         pad=$(( row_width - $(str_width "$body") ))
         (( pad < 0 )) && pad=0
-        printf '%s%b▸ %s%s%b\n' "$UI_INDENT" "$REV" "$body" "$(repeat ' ' "$pad")" "$RESET"
+        printf '%s%b%s %s%s%b%b\n' "$UI_INDENT" "$REV" "$G_CURSOR" "$body" "$(repeat ' ' "$pad")" "$RESET" "$CLREOL"
         return 0
     fi
 
@@ -2565,12 +2615,12 @@ menu_row() {
     [[ "$key" == "U" ]] && key_color="$DANGER"
     [[ "$key" == "0" ]] && key_color="$GRAY"
     if (( show_hint == 1 )); then
-        printf '%s  %b[%s]%b %b%s%b%s%b%s%b\n' "$UI_INDENT" \
+        printf '%s  %b[%s]%b %b%s%b%s%b%s%b%b\n' "$UI_INDENT" \
             "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET" \
-            "$(repeat ' ' "$label_pad")" "$MUTED" "$hint" "$RESET"
+            "$(repeat ' ' "$label_pad")" "$MUTED" "$hint" "$RESET" "$CLREOL"
     else
-        printf '%s  %b[%s]%b %b%s%b\n' "$UI_INDENT" \
-            "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET"
+        printf '%s  %b[%s]%b %b%s%b%b\n' "$UI_INDENT" \
+            "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET" "$CLREOL"
     fi
 }
 
@@ -2588,13 +2638,14 @@ menu_status_block() {
 
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         pid_value=$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null)
-        status_badge="${SUCCESS}● 运行中${RESET}${MUTED} · PID ${pid_value:-N/A}${RESET}"
+        status_badge="${SUCCESS}${G_RUN} 运行中${RESET}${MUTED} ${G_SEP} PID ${pid_value:-N/A}${RESET}"
     else
-        status_badge="${DANGER}○ 已停止${RESET}"
+        status_badge="${DANGER}${G_STOP} 已停止${RESET}"
     fi
 
     get_current_speed
-    speed_part="${SUCCESS}↓${RESET} ${VALUE}${CURRENT_SPEED_TEXT}${RESET}${MUTED} · ${CURRENT_SPEED_IFACE:-无接口}${RESET}"
+    # 状态行用「下行」二字而非箭头：ASCII 字形下的 v/^ 在这里容易被误读
+    speed_part="${MUTED}下行${RESET} ${VALUE}${CURRENT_SPEED_TEXT}${RESET}${MUTED} ${G_SEP} ${CURRENT_SPEED_IFACE:-无接口}${RESET}"
 
     get_target_summary target_summary "$compact"
     bar_part=""
@@ -2604,8 +2655,8 @@ menu_status_block() {
     mem_used=$(free -m 2>/dev/null | awk '/^Mem:/ {printf "%.1f", $3/1024}')
     mem_total=$(awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo 2>/dev/null)
 
-    host_line="${VALUE}${MENU_HOST_NAME}${RESET}${MUTED} · CPU ${MENU_CPU_CORES} 核 · 内存 ${mem_used:-?}/${mem_total:-?} GB"
-    [[ "$compact" == "full" ]] && host_line="${host_line} · 磁盘 $(menu_disk_info)"
+    host_line="${VALUE}${MENU_HOST_NAME}${RESET}${MUTED} ${G_SEP} CPU ${MENU_CPU_CORES} 核 ${G_SEP} 内存 ${mem_used:-?}/${mem_total:-?} GB"
+    [[ "$compact" == "full" ]] && host_line="${host_line} ${G_SEP} 磁盘 $(menu_disk_info)"
     host_line="${host_line}${RESET}"
 
     ui_split "${MUTED}服务${RESET}   ${status_badge}" "$speed_part" "$width"
@@ -2628,7 +2679,7 @@ render_main_menu() {
     (( row_width > inner - 2 )) && row_width=$(( inner - 2 ))
 
     printf '\033[H'
-    echo
+    ui_blank
     ui_title "$APP_TITLE"
     menu_status_block "$width"
     ui_rule "$width"
@@ -2639,10 +2690,10 @@ render_main_menu() {
 
     ui_rule "$width"
     if (( show_hint == 0 )); then
-        printf '%s%b说明%b   %b%s%b\n' "$UI_INDENT" "$MUTED" "$RESET" \
-            "$MUTED" "${MENU_HINTS[$MENU_SELECTED]}" "$RESET"
+        printf '%s%b说明%b   %b%s%b%b\n' "$UI_INDENT" "$MUTED" "$RESET" \
+            "$MUTED" "${MENU_HINTS[$MENU_SELECTED]}" "$RESET" "$CLREOL"
     fi
-    ui_keyhint "↑↓ 选择 · Enter 确认 · 按键直达 · Q 退出"
+    ui_keyhint "${G_KEY_UPDOWN} 选择 ${G_SEP} Enter 确认 ${G_SEP} 按键直达 ${G_SEP} Q 退出"
     printf '\033[J'
 }
 
@@ -2733,14 +2784,14 @@ show_menu_plain() {
     local target_summary i choice pid
     load_config 2>/dev/null || true
 
-    echo
+    ui_blank
     ui_title "$APP_TITLE"
 
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         pid=$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null)
-        ui_kv "服务" "${SUCCESS}● 运行中${RESET}${MUTED} · PID ${pid:-N/A}${RESET}"
+        ui_kv "服务" "${SUCCESS}${G_RUN} 运行中${RESET}${MUTED} ${G_SEP} PID ${pid:-N/A}${RESET}"
     else
-        ui_kv "服务" "${DANGER}○ 已停止${RESET}"
+        ui_kv "服务" "${DANGER}${G_STOP} 已停止${RESET}"
     fi
     get_target_summary target_summary
     ui_kv "目标" "$target_summary"
@@ -2825,18 +2876,18 @@ install_missing_deps() {
         done
 
         if [[ ${#still_missing[@]} -gt 0 ]]; then
-            echo -e "${DANGER}❌ 以下依赖安装失败: ${still_missing[*]}${RESET}"
+            echo -e "${DANGER}${G_ERR} 以下依赖安装失败: ${still_missing[*]}${RESET}"
             echo -e "${INFO}请手动安装后重新运行脚本${RESET}"
             exit 1
         else
-            echo -e "${SUCCESS}✅ 依赖安装完成${RESET}"
+            echo -e "${SUCCESS}${G_OK} 依赖安装完成${RESET}"
         fi
     fi
 }
 
 check_environment() {
     if [[ $EUID -ne 0 ]]; then
-        echo -e "${DANGER}❌ 需要root权限${RESET}"
+        echo -e "${DANGER}${G_ERR} 需要 root 权限${RESET}"
         exit 1
     fi
 
@@ -2848,13 +2899,13 @@ check_environment() {
 
     # 检查关键系统文件
     if [[ ! -d "/sys/class/net" ]]; then
-        echo -e "${DANGER}❌ 系统网络接口目录不存在${RESET}"
+        echo -e "${DANGER}${G_ERR} 系统网络接口目录不存在${RESET}"
         exit 1
     fi
 
     # 检查systemd支持
     if ! systemctl --version &>/dev/null; then
-        echo -e "${DANGER}❌ 系统不支持systemd${RESET}"
+        echo -e "${DANGER}${G_ERR} 系统不支持 systemd${RESET}"
         exit 1
     fi
 }
