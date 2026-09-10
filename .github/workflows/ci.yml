@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shell-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: bash 语法检查
+        run: |
+          for f in install.sh milier_flow_latest.sh; do
+            echo "== bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: 校验内嵌生成脚本
+        run: |
+          # 主脚本会在运行时生成若干辅助脚本，这里把它们从 heredoc 中抽出来单独做语法检查
+          python3 - <<'PY'
+          import re, subprocess, sys, pathlib
+
+          text = pathlib.Path("milier_flow_latest.sh").read_text(encoding="utf-8")
+          out = pathlib.Path("generated"); out.mkdir(exist_ok=True)
+          markers = ["LIBEOF", "STARTEOF", "MONITOREOF", "TARGETEOF"]
+          failed = False
+
+          for marker in markers:
+              m = re.search(r"<< '%s'\n(.*?)\n%s\n" % (marker, marker), text, re.S)
+              if not m:
+                  print("找不到 heredoc:", marker)
+                  failed = True
+                  continue
+              path = out / (marker.lower() + ".sh")
+              path.write_text("#!/bin/bash\n" + m.group(1) + "\n", encoding="utf-8")
+              rc = subprocess.call(["bash", "-n", str(path)])
+              print(("OK  " if rc == 0 else "FAIL"), path)
+              failed = failed or rc != 0
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: shellcheck
+        run: shellcheck --severity=warning install.sh milier_flow_latest.sh || true
