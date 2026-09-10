@@ -1,22 +1,22 @@
 #!/bin/bash
 
 # ═══════════════════════════════════════════════════════════════════════════════════
-# 米粒儿 VPS 流量控制台
+# VPS 流量消耗管理工具
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # ──────────────────────────────── 配置常量 ────────────────────────────────────
 SCRIPT_VERSION="v3.4.0"
-SCRIPT_NAME="milier_flow.sh"
-SERVICE_NAME="milier_flow"
-APP_TITLE="米粒儿 VPS 流量控制台"
-LOG_FILE="/root/milier_flow.log"
-MONITOR_SCRIPT="/root/milier_monitor.sh"
-UNINSTALL_SCRIPT="/root/milier_uninstall.sh"
-CONFIG_FILE="/root/milier_config.conf"
-SHORTCUT_CONFIG="/root/milier_shortcut.conf"
-TARGET_CONFIG_FILE="/root/milier_target.conf"
-PRESET_CONFIG_FILE="/root/milier_presets.conf"
-STATE_DIR="/run/milier"
+SCRIPT_NAME="vpsflow.sh"
+SERVICE_NAME="vpsflow"
+APP_TITLE="VPS 流量消耗管理工具"
+LOG_FILE="/root/vpsflow.log"
+MONITOR_SCRIPT="/root/vpsflow_monitor.sh"
+UNINSTALL_SCRIPT="/root/vpsflow_uninstall.sh"
+CONFIG_FILE="/root/vpsflow_config.conf"
+SHORTCUT_CONFIG="/root/vpsflow_shortcut.conf"
+TARGET_CONFIG_FILE="/root/vpsflow_target.conf"
+PRESET_CONFIG_FILE="/root/vpsflow_presets.conf"
+STATE_DIR="/run/vpsflow"
 DEFAULT_SHORTCUT="xh"
 
 # ──────────────────────────────── 专业高对比度配色 ────────────────────────────
@@ -268,8 +268,8 @@ MIRROR_COUNT=${#MIRROR_URLS[@]}
 
 # 脚本更新源，按顺序尝试
 UPDATE_URLS=(
-    "https://xh.813099.xyz/milier_flow_latest.sh"
-    "https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
+    "https://xh.813099.xyz/vpsflow_latest.sh"
+    "https://raw.githubusercontent.com/charmtv/VPS/main/vpsflow_latest.sh"
 )
 
 # 读取网卡计数器，非法或不可读时返回 0：safe_stat_bytes <接口> <rx|tx>
@@ -581,7 +581,7 @@ save_config() {
 
     {
         echo "# ═══════════════════════════════════════════════════════════════════"
-        echo "# 米粒儿配置文件 - $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "# 配置文件 - $(date '+%Y-%m-%d %H:%M:%S')"
         echo "# ═══════════════════════════════════════════════════════════════════"
         write_config_line "LAST_URL" "$url" || return 1
         write_config_line "LAST_THREADS" "$threads" || return 1
@@ -604,15 +604,17 @@ load_config() {
 
 # ──────────────────────────────── 快捷键管理 ──────────────────────────────────
 
-# 创建快捷键脚本
+# 创建快捷键脚本：create_shortcut [快捷键名] [目标脚本路径]
+# 目标脚本路径默认取 $0；迁移场景下需要显式指向新路径
 create_shortcut() {
     local shortcut_name="${1:-$(get_shortcut_name)}"
     [[ -z "$shortcut_name" ]] && shortcut_name="$DEFAULT_SHORTCUT"
     [[ "$shortcut_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]] || shortcut_name="$DEFAULT_SHORTCUT"
     local shortcut_path="/usr/local/bin/$shortcut_name"
-    local script_path="$0"
+    local script_path
+    script_path=$(readlink -f "${2:-$0}")
     local script_dir
-    script_dir=$(dirname "$(readlink -f "$script_path")")
+    script_dir=$(dirname "$script_path")
 
     echo -e "${INFO}正在设置快捷键 ${PRIMARY}$shortcut_name${RESET}${INFO}...${RESET}"
 
@@ -624,7 +626,7 @@ create_shortcut() {
 
     cat > "$shortcut_path" << EOF
 #!/bin/bash
-# 米粒儿VPS流量管理工具快捷启动脚本
+# VPS流量消耗管理工具快捷启动脚本
 cd "$script_dir"
 bash "$script_path" "\$@"
 EOF
@@ -650,8 +652,91 @@ remove_shortcut() {
     fi
 }
 
+# ──────────────────────────── 旧版本（milier_*）迁移 ──────────────────────────
+# v3.4.0 起标识符统一为 vpsflow_*。已装旧版的机器如果不迁移，会留下一个仍在跑的
+# milier_flow 服务和一堆孤儿文件，这里在启动时一次性接管并清理。
+
+LEGACY_SERVICE="milier_flow"
+LEGACY_SCRIPT="/root/milier_flow.sh"
+
+# 是否存在旧版安装痕迹
+has_legacy_install() {
+    [[ -f "/etc/systemd/system/${LEGACY_SERVICE}.service" ]] && return 0
+    local f
+    for f in "$LEGACY_SCRIPT" /root/milier_config.conf /root/milier_target.conf \
+             /root/milier_shortcut.conf /root/milier_start.sh /root/milier_monitor.sh; do
+        [[ -e "$f" ]] && return 0
+    done
+    return 1
+}
+
+migrate_legacy_install() {
+    has_legacy_install || return 0
+
+    local self shortcut_name f
+    self=$(readlink -f "$0")
+
+    echo
+    ui_warn "检测到旧版本安装，正在迁移到新的命名..."
+
+    # 1. 停止并移除旧服务，清掉残留下载线程
+    if [[ -f "/etc/systemd/system/${LEGACY_SERVICE}.service" ]]; then
+        systemctl stop "$LEGACY_SERVICE" 2>/dev/null
+        systemctl disable "$LEGACY_SERVICE" 2>/dev/null
+        rm -f "/etc/systemd/system/${LEGACY_SERVICE}.service"
+        systemctl daemon-reload 2>/dev/null
+    fi
+    pkill -f milier_thread 2>/dev/null
+    pkill -f "curl -A MilierFlow" 2>/dev/null
+
+    # 2. 迁移配置与日志（新文件已存在时不覆盖）
+    [[ -f /root/milier_config.conf && ! -f "$CONFIG_FILE" ]] \
+        && mv -f /root/milier_config.conf "$CONFIG_FILE"
+    [[ -f /root/milier_target.conf && ! -f "$TARGET_CONFIG_FILE" ]] \
+        && mv -f /root/milier_target.conf "$TARGET_CONFIG_FILE"
+    [[ -f /root/milier_flow.log && ! -f "$LOG_FILE" ]] \
+        && mv -f /root/milier_flow.log "$LOG_FILE"
+
+    # 3. 记住旧快捷键名（旧快捷键文件指向旧脚本路径，需要重建）
+    shortcut_name="$DEFAULT_SHORTCUT"
+    if [[ -f /root/milier_shortcut.conf ]]; then
+        SHORTCUT_NAME=""
+        safe_source_config /root/milier_shortcut.conf SHORTCUT_NAME SHORTCUT_PATH CREATED_TIME 2>/dev/null
+        [[ "$SHORTCUT_NAME" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]] && shortcut_name="$SHORTCUT_NAME"
+        rm -f /root/milier_shortcut.conf
+    fi
+
+    # 4. 清理旧定时任务、辅助脚本与缓存（不删正在运行的自己）
+    crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
+    for f in /root/milier_monitor.sh /root/milier_uninstall.sh /root/milier_start.sh \
+             /root/milier_target_check.sh /root/milier_presets.conf \
+             /root/milier_monitor_data.log /root/.milier_menu_speed.state; do
+        [[ "$f" == "$self" ]] || rm -f "$f"
+    done
+    rm -f /root/milier_flow*.log /tmp/milier_*
+    rm -rf /run/milier
+
+    # 5. 主脚本仍在旧路径运行时（旧版通过“检查更新”原地升级的情况），
+    #    迁到新路径、重建快捷键，再从新路径重启
+    if [[ "$self" == "$LEGACY_SCRIPT" ]]; then
+        if install -m 755 "$self" "/root/$SCRIPT_NAME"; then
+            rm -f "$self"
+            create_shortcut "$shortcut_name" "/root/$SCRIPT_NAME"
+            ui_ok "已迁移到 /root/$SCRIPT_NAME，正在重启..."
+            sleep 1
+            exec bash "/root/$SCRIPT_NAME"
+        fi
+        ui_err "迁移到新路径失败，请重新运行安装命令"
+        return 1
+    fi
+
+    create_shortcut "$shortcut_name"
+    ui_ok "旧版本已迁移完成"
+    sleep 1
+}
+
 # ──────────────────────────────── 初始化服务 ──────────────────────────────────
-# 输出嵌入到生成脚本（milier_start.sh / milier_target_check.sh / 监控脚本）中的公共安全函数库
+# 输出嵌入到生成脚本（vpsflow_start.sh / vpsflow_target_check.sh / 监控脚本）中的公共安全函数库
 emit_common_library() {
     cat << 'LIBEOF'
 is_safe_config_value() {
@@ -665,7 +750,7 @@ is_safe_config_value() {
 }
 
 safe_source_target_config() {
-  local file="/root/milier_target.conf"
+  local file="/root/vpsflow_target.conf"
   [[ -f "$file" ]] || return 1
   local allowed=" TARGET_GB TARGET_START_RX TARGET_INTERFACE TARGET_SET_TIME TARGET_AUTO_STOP TARGET_PREV_CONSUMED "
   local line key value
@@ -683,17 +768,17 @@ safe_source_target_config() {
 LIBEOF
 }
 
-# 创建后台启动脚本 /root/milier_start.sh
+# 创建后台启动脚本 /root/vpsflow_start.sh
 create_start_script() {
     {
         echo '#!/bin/bash'
         emit_common_library
         cat << 'STARTEOF'
-# 米粒儿流量消耗后台启动脚本
-URL="$MILIER_URL"
-THREADS="$MILIER_THREADS"
-LOG_FILE="/root/milier_flow.log"
-TARGET_FILE="/root/milier_target.conf"
+# 流量消耗后台启动脚本
+URL="$VPSFLOW_URL"
+THREADS="$VPSFLOW_THREADS"
+LOG_FILE="/root/vpsflow.log"
+TARGET_FILE="/root/vpsflow_target.conf"
 
 [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || THREADS=1
 
@@ -745,7 +830,7 @@ if [[ -f "$TARGET_FILE" ]]; then
 
         if [[ $CONSUMED -ge $TARGET_BYTES ]] 2>/dev/null; then
           echo "$(date '+%Y-%m-%d %H:%M:%S'): 流量目标 ${TARGET_GB}GB 已达成，服务自动停止" >> "$LOG_FILE"
-          systemctl stop milier_flow
+          systemctl stop vpsflow
           exit 0
         fi
       fi
@@ -757,18 +842,18 @@ fi
 # 2. 启动下载并发线程
 for ((i=1;i<=THREADS;i++)); do
   bash -c 'while true; do
-    if curl -A "MilierFlow" -s -m 30 --connect-timeout 10 --retry 2 --retry-delay 1 -o /dev/null "$1"; then
+    if curl -A "VPSFlow" -s -m 30 --connect-timeout 10 --retry 2 --retry-delay 1 -o /dev/null "$1"; then
       sleep 0.1
     else
       sleep 2
     fi
-  done' milier_thread "$URL" &
+  done' vpsflow_thread "$URL" &
 done
 
 wait
 STARTEOF
-    } > /root/milier_start.sh
-    chmod +x /root/milier_start.sh
+    } > /root/vpsflow_start.sh
+    chmod +x /root/vpsflow_start.sh
 }
 
 # 创建 systemd 服务单元；优先沿用已保存的 URL/线程数
@@ -781,7 +866,7 @@ create_service_file() {
 
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
-Description=米粒儿 VPS 流量消耗后台服务
+Description=VPS 流量消耗后台服务
 After=network.target
 StartLimitBurst=3
 StartLimitIntervalSec=60
@@ -789,11 +874,11 @@ StartLimitIntervalSec=60
 [Service]
 Type=simple
 WorkingDirectory=/root
-Environment="MILIER_URL=$url"
-Environment="MILIER_THREADS=$threads"
-ExecStart=/bin/bash /root/milier_start.sh
-ExecStop=/usr/bin/pkill -f milier_thread
-ExecStopPost=/bin/bash -c 'pkill -f milier_check; pkill -f "curl -A MilierFlow"; echo "\$(date "+%%Y-%%m-%%d %%H:%%M:%%S"): [停止] 服务已停止" >> $LOG_FILE'
+Environment="VPSFLOW_URL=$url"
+Environment="VPSFLOW_THREADS=$threads"
+ExecStart=/bin/bash /root/vpsflow_start.sh
+ExecStop=/usr/bin/pkill -f vpsflow_thread
+ExecStopPost=/bin/bash -c 'pkill -f vpsflow_check; pkill -f "curl -A VPSFlow"; echo "\$(date "+%%Y-%%m-%%d %%H:%%M:%%S"): [停止] 服务已停止" >> $LOG_FILE'
 Restart=on-failure
 RestartSec=5
 
@@ -805,13 +890,13 @@ EOF
     check_command "系统配置失败" || return 1
 }
 
-# 创建实时监控脚本 /root/milier_monitor.sh
+# 创建实时监控脚本 /root/vpsflow_monitor.sh
 create_monitor_script() {
     {
         echo '#!/bin/bash'
         emit_common_library
         cat << 'MONITOREOF'
-# 米粒儿 VPS 实时流量监控
+# VPS 实时流量监控
 INTERFACE=$1
 
 # ── 配色（与主控制台保持一致） ──
@@ -1043,7 +1128,7 @@ create_uninstall_script() {
 #!/bin/bash
 SUCCESS="\e[32m"; WARNING="\e[33m"; WHITE="\e[97m"; BOLD="\e[1m"; RESET="\e[0m"
 
-echo -e "\${WARNING}正在卸载米粒儿服务...\${RESET}"
+echo -e "\${WARNING}正在卸载服务...\${RESET}"
 systemctl stop $SERVICE_NAME 2>/dev/null
 systemctl disable $SERVICE_NAME 2>/dev/null
 rm -f /etc/systemd/system/$SERVICE_NAME.service
@@ -1055,23 +1140,23 @@ if [[ -f "$SHORTCUT_CONFIG" ]]; then
     [[ "\$shortcut_path" =~ ^/usr/local/bin/[A-Za-z][A-Za-z0-9_]*$ ]] && rm -f "\$shortcut_path"
 fi
 
-pkill -f milier_thread 2>/dev/null
-pkill -f milier_check 2>/dev/null
-pkill -f "curl -A MilierFlow" 2>/dev/null
-crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
-rm -f "$MONITOR_SCRIPT" "$UNINSTALL_SCRIPT" "$LOG_FILE" "$CONFIG_FILE" "$SHORTCUT_CONFIG" "$TARGET_CONFIG_FILE" "$PRESET_CONFIG_FILE" "/root/milier_start.sh" "/root/milier_target_check.sh" "/root/$SCRIPT_NAME" "/root/milier_monitor_data.log" /tmp/milier_latest_check.* /tmp/milier_* 2>/dev/null
+pkill -f vpsflow_thread 2>/dev/null
+pkill -f vpsflow_check 2>/dev/null
+pkill -f "curl -A VPSFlow" 2>/dev/null
+crontab -l 2>/dev/null | grep -v "vpsflow_target_check.sh" | crontab - 2>/dev/null
+rm -f "$MONITOR_SCRIPT" "$UNINSTALL_SCRIPT" "$LOG_FILE" "$CONFIG_FILE" "$SHORTCUT_CONFIG" "$TARGET_CONFIG_FILE" "$PRESET_CONFIG_FILE" "/root/vpsflow_start.sh" "/root/vpsflow_target_check.sh" "/root/$SCRIPT_NAME" "/root/vpsflow_monitor_data.log" /tmp/vpsflow_latest_check.* /tmp/vpsflow_* 2>/dev/null
 echo -e "\${SUCCESS}✅ 卸载完成\${RESET}"
 EOF
     chmod +x "$UNINSTALL_SCRIPT"
 }
 
 init_service() {
-    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]] && [[ -f "/root/milier_start.sh" ]] \
+    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]] && [[ -f "/root/vpsflow_start.sh" ]] \
         && [[ -f "$MONITOR_SCRIPT" ]] && [[ -f "$UNINSTALL_SCRIPT" ]]; then
         return 0
     fi
 
-    echo -e "${WARNING}⚠️  正在初始化米粒儿服务...${RESET}"
+    echo -e "${WARNING}⚠️  正在初始化服务...${RESET}"
 
     # 检查系统权限
     if [[ $EUID -ne 0 ]]; then
@@ -1093,7 +1178,7 @@ init_service() {
     default_url="https://speed.cloudflare.com/__down?bytes=104857600"
 
     # 只补建缺失的部分，避免覆盖用户已有配置
-    [[ -f "/root/milier_start.sh" ]] || create_start_script
+    [[ -f "/root/vpsflow_start.sh" ]] || create_start_script
     if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]]; then
         systemctl daemon-reload 2>/dev/null
     else
@@ -1261,8 +1346,8 @@ start_service() {
     # 更新 systemd 服务文件中的 URL 与线程数
     if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]]; then
         escaped_url=$(escape_sed_replacement "$url")
-        sed -i "s|Environment=\"MILIER_URL=.*\"|Environment=\"MILIER_URL=$escaped_url\"|" "/etc/systemd/system/$SERVICE_NAME.service"
-        sed -i "s|Environment=\"MILIER_THREADS=.*\"|Environment=\"MILIER_THREADS=$threads\"|" "/etc/systemd/system/$SERVICE_NAME.service"
+        sed -i "s|Environment=\"VPSFLOW_URL=.*\"|Environment=\"VPSFLOW_URL=$escaped_url\"|" "/etc/systemd/system/$SERVICE_NAME.service"
+        sed -i "s|Environment=\"VPSFLOW_THREADS=.*\"|Environment=\"VPSFLOW_THREADS=$threads\"|" "/etc/systemd/system/$SERVICE_NAME.service"
         systemctl daemon-reload
     fi
 
@@ -1289,8 +1374,8 @@ stop_service() {
     ui_step "正在停止服务..."
     if systemctl stop "$SERVICE_NAME"; then
         # 兜底清理：systemd 未能回收的下载线程
-        pkill -f milier_thread 2>/dev/null
-        pkill -f "curl -A MilierFlow" 2>/dev/null
+        pkill -f vpsflow_thread 2>/dev/null
+        pkill -f "curl -A VPSFlow" 2>/dev/null
         ui_ok "服务已停止"
     else
         ui_err "停止失败，可用 systemctl status $SERVICE_NAME 查看状态"
@@ -1844,7 +1929,7 @@ display_ascii_chart() {
 # 保存监控数据
 save_monitor_data() {
     local interface="$1" rx_total="$2" tx_total="$3" duration="$4" rx_peak="$5" tx_peak="$6"
-    local data_file="/root/milier_monitor_data.log"
+    local data_file="/root/vpsflow_monitor_data.log"
     local timestamp
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -1889,7 +1974,7 @@ check_update() {
     local current_version="$SCRIPT_VERSION"
     local current_script temp_file script_url request_url separator download_ok=false
     current_script=$(readlink -f "$0")
-    temp_file=$(mktemp /tmp/milier_latest_check.XXXXXX.sh) || {
+    temp_file=$(mktemp /tmp/vpsflow_latest_check.XXXXXX.sh) || {
         ui_err "创建临时文件失败"
         ui_pause
         return
@@ -2015,7 +2100,7 @@ create_target_check_script() {
         emit_common_library
         cat << 'TARGETEOF'
 # 流量目标自动停止检查脚本
-TARGET_FILE="/root/milier_target.conf"
+TARGET_FILE="/root/vpsflow_target.conf"
 
 safe_source_target_config || exit 0
 [[ "$TARGET_AUTO_STOP" != "true" ]] && exit 0
@@ -2038,25 +2123,25 @@ TARGET_BYTES="${TARGET_BYTES%.*}"
 [[ "$TARGET_BYTES" =~ ^[0-9]+$ && "$TARGET_BYTES" -gt 0 ]] || exit 0
 
 if [[ $CONSUMED -ge $TARGET_BYTES ]] 2>/dev/null; then
-    systemctl stop milier_flow 2>/dev/null
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): 流量目标 ${TARGET_GB}GB 已达成，服务已自动停止" >> /root/milier_flow.log
+    systemctl stop vpsflow 2>/dev/null
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): 流量目标 ${TARGET_GB}GB 已达成，服务已自动停止" >> /root/vpsflow.log
 fi
 TARGETEOF
-    } > /root/milier_target_check.sh
-    chmod +x /root/milier_target_check.sh
+    } > /root/vpsflow_target_check.sh
+    chmod +x /root/vpsflow_target_check.sh
 }
 
 # 启用流量目标自动停止：生成检查脚本并挂到 crontab
 target_arm_auto_stop() {
     create_target_check_script
-    (crontab -l 2>/dev/null | grep -v "milier_target_check.sh"; \
-        echo "*/5 * * * * /bin/bash /root/milier_target_check.sh") | crontab -
+    (crontab -l 2>/dev/null | grep -v "vpsflow_target_check.sh"; \
+        echo "*/5 * * * * /bin/bash /root/vpsflow_target_check.sh") | crontab -
 }
 
 # 关闭流量目标自动停止：摘掉 crontab 条目并删除检查脚本
 target_disarm_auto_stop() {
-    crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
-    rm -f /root/milier_target_check.sh
+    crontab -l 2>/dev/null | grep -v "vpsflow_target_check.sh" | crontab - 2>/dev/null
+    rm -f /root/vpsflow_target_check.sh
 }
 
 # 设置流量消耗目标
@@ -2176,7 +2261,7 @@ speed_test() {
 
     if command -v xargs &>/dev/null && command -v seq &>/dev/null; then
         # 4 并发下载测试，更接近多线程服务的真实吞吐
-        tmp_dir=$(mktemp -d /tmp/milier_speedtest.XXXXXX)
+        tmp_dir=$(mktemp -d /tmp/vpsflow_speedtest.XXXXXX)
         seq 4 | xargs -P4 -I{} curl -s -o /dev/null -w '%{size_download}\n' \
             --max-time 15 --connect-timeout 5 -r 0-10485759 "$test_url" 2>/dev/null > "$tmp_dir/sizes"
         bytes_downloaded=$(awk '{s += $1} END {print s + 0}' "$tmp_dir/sizes" 2>/dev/null || echo 0)
@@ -2244,9 +2329,9 @@ uninstall_service() {
     systemctl disable "$SERVICE_NAME" 2>/dev/null
 
     # 2. 杀死所有残留进程
-    pkill -f milier_thread 2>/dev/null
-    pkill -f milier_check 2>/dev/null
-    pkill -f "curl -A MilierFlow" 2>/dev/null
+    pkill -f vpsflow_thread 2>/dev/null
+    pkill -f vpsflow_check 2>/dev/null
+    pkill -f "curl -A VPSFlow" 2>/dev/null
 
     # 3. 删除 systemd 服务文件
     rm -f "/etc/systemd/system/$SERVICE_NAME.service"
@@ -2254,20 +2339,20 @@ uninstall_service() {
 
     # 4. 删除主脚本与辅助脚本
     rm -f "/root/$SCRIPT_NAME" "$MONITOR_SCRIPT" "$UNINSTALL_SCRIPT" \
-          /root/milier_start.sh /root/milier_target_check.sh
+          /root/vpsflow_start.sh /root/vpsflow_target_check.sh
 
     # 5. 删除全部配置
     rm -f "$CONFIG_FILE" "$SHORTCUT_CONFIG" "$TARGET_CONFIG_FILE" "$PRESET_CONFIG_FILE"
 
     # 6. 删除日志与监控数据
-    rm -f "$LOG_FILE" /root/milier_flow*.log /root/milier_monitor_data.log
+    rm -f "$LOG_FILE" /root/vpsflow*.log /root/vpsflow_monitor_data.log
 
     # 7. 清理临时文件与运行期状态
-    rm -f /tmp/milier_* /root/.milier_menu_speed.state
+    rm -f /tmp/vpsflow_* /root/.vpsflow_menu_speed.state
     rm -rf "$STATE_DIR"
 
     # 8. 清理 crontab 中的相关条目
-    crontab -l 2>/dev/null | grep -v "milier_target_check.sh" | crontab - 2>/dev/null
+    crontab -l 2>/dev/null | grep -v "vpsflow_target_check.sh" | crontab - 2>/dev/null
 
     # 9. 删除快捷键
     [[ -n "$saved_shortcut_path" ]] && rm -f "$saved_shortcut_path"
@@ -2284,7 +2369,7 @@ uninstall_service() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 主菜单（分栏网格 + 方向键二维导航 + 状态区实时刷新）
+# 主菜单（竖排单列 + 方向键选择 + 状态区实时刷新）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── 菜单数据：键 / 名称 / 说明 三者一一对应，交互菜单与降级菜单共用 ──
@@ -2297,21 +2382,21 @@ MENU_LABELS=(
     "卸载全部服务"    "退出控制台"
 )
 MENU_HINTS=(
-    "选择下载源与线程数并启动后台服务" "停止服务与全部下载线程"
-    "以当前配置重新启动服务"           "设置消耗上限与达标自动停止"
-    "全屏查看实时速率与累计流量"       "峰值记录、趋势图与速率告警"
-    "检查监控依赖与网卡统计可读性"     "4 并发测试当前出口下载速度"
-    "浏览最近的服务运行日志"           "安装、改名或删除命令快捷方式"
+    "选择下载源与线程数并启动服务" "停止服务与全部下载线程"
+    "以当前配置重新启动服务"       "设置消耗上限与达标自动停止"
+    "实时速率、累计流量与进度"     "峰值记录、趋势图与速率告警"
+    "检查依赖与网卡统计可读性"     "4 并发测试当前出口下载速度"
+    "浏览最近的服务运行日志"       "安装、改名或删除命令快捷方式"
     "对比远端版本并原地升级"
-    "删除服务、脚本与全部配置"         "返回系统 Shell"
+    "删除服务、脚本与全部配置"     "返回系统 Shell"
 )
 MENU_COUNT=${#MENU_KEYS[@]}
 MENU_SELECTED=0
 
 MENU_RESIZED=0
 MENU_IDLE_REFRESH=2                       # 空闲多少秒自动刷新一次状态区
-MENU_TWO_COL_MIN=60                       # 达到该宽度即启用双栏布局（等于最小排版宽度）
-MENU_GUTTER=2                             # 双栏之间的间距
+MENU_LABEL_WIDTH=18                       # 名称列宽度，说明列由此对齐
+MENU_HINT_MIN_WIDTH=62                    # 低于该宽度隐藏说明列，改在底部单行显示
 
 # 运行期缓存，避免每次刷新都重复 fork 外部命令
 MENU_HOST_NAME=""
@@ -2326,111 +2411,14 @@ menu_state_file() {
         if mkdir -p "$STATE_DIR" 2>/dev/null && chmod 700 "$STATE_DIR" 2>/dev/null; then
             MENU_SPEED_STATE="$STATE_DIR/menu_speed.state"
         else
-            MENU_SPEED_STATE="/root/.milier_menu_speed.state"
+            MENU_SPEED_STATE="/root/.vpsflow_menu_speed.state"
         fi
     fi
     printf '%s' "$MENU_SPEED_STATE"
 }
 
-# ── 布局：H=分组标题行，R=选项行，B=空行；导航网格由 R 行推导 ──
-
-MENU_LAYOUT=()
-MENU_NAV=()
-MENU_NAV_ROWS=0
-MENU_NAV_COLS=1
-MENU_LAYOUT_WIDTH=-1
-
-menu_build_layout() {
-    local width="$1" entry a b
-    [[ "$width" == "$MENU_LAYOUT_WIDTH" ]] && return 0
-    MENU_LAYOUT_WIDTH="$width"
-    MENU_NAV=()
-    MENU_NAV_ROWS=0
-
-    if (( width >= MENU_TWO_COL_MIN )); then
-        MENU_NAV_COLS=2
-        MENU_LAYOUT=(
-            "H|服务管理|监控工具"
-            "R|0|4" "R|1|5" "R|2|6" "R|3|7"
-            "B"
-            "H|系统维护|控制台"
-            "R|8|11" "R|9|12" "R|10|-1"
-        )
-    else
-        MENU_NAV_COLS=1
-        MENU_LAYOUT=(
-            "H|服务管理"  "R|0" "R|1" "R|2" "R|3"
-            "H|监控工具"  "R|4" "R|5" "R|6" "R|7"
-            "H|系统维护"  "R|8" "R|9" "R|10"
-            "H|控制台"    "R|11" "R|12"
-        )
-    fi
-
-    for entry in "${MENU_LAYOUT[@]}"; do
-        [[ "$entry" == R\|* ]] || continue
-        IFS='|' read -r _ a b <<< "$entry"
-        if (( MENU_NAV_COLS == 2 )); then
-            MENU_NAV+=("$a" "${b:--1}")
-        else
-            MENU_NAV+=("$a")
-        fi
-        MENU_NAV_ROWS=$((MENU_NAV_ROWS + 1))
-    done
-}
-
-# 在导航网格中定位当前选中项，结果写入 MENU_CUR_ROW / MENU_CUR_COL
-menu_locate() {
-    local r c
-    MENU_CUR_ROW=0
-    MENU_CUR_COL=0
-    for ((r=0; r<MENU_NAV_ROWS; r++)); do
-        for ((c=0; c<MENU_NAV_COLS; c++)); do
-            if [[ "${MENU_NAV[r*MENU_NAV_COLS+c]}" == "$MENU_SELECTED" ]]; then
-                MENU_CUR_ROW=$r
-                MENU_CUR_COL=$c
-                return 0
-            fi
-        done
-    done
-}
-
-# 方向移动：上下在同列内跳过空位并循环，左右切换分栏（目标为空则取该列最近的选项）
-menu_move() {
-    local dir="$1" step idx n nr nc rr
-    menu_locate
-    case "$dir" in
-        up|down)
-            step=1
-            [[ "$dir" == "up" ]] && step=-1
-            nr=$MENU_CUR_ROW
-            for ((n=0; n<MENU_NAV_ROWS; n++)); do
-                nr=$(( (nr + step + MENU_NAV_ROWS) % MENU_NAV_ROWS ))
-                idx="${MENU_NAV[nr*MENU_NAV_COLS+MENU_CUR_COL]}"
-                if (( idx >= 0 )); then
-                    MENU_SELECTED=$idx
-                    return 0
-                fi
-            done
-            ;;
-        left|right)
-            (( MENU_NAV_COLS < 2 )) && return 0
-            step=1
-            [[ "$dir" == "left" ]] && step=-1
-            nc=$(( (MENU_CUR_COL + step + MENU_NAV_COLS) % MENU_NAV_COLS ))
-            idx="${MENU_NAV[MENU_CUR_ROW*MENU_NAV_COLS+nc]}"
-            if (( idx < 0 )); then
-                for ((rr=MENU_CUR_ROW-1; rr>=0; rr--)); do
-                    idx="${MENU_NAV[rr*MENU_NAV_COLS+nc]}"
-                    (( idx >= 0 )) && break
-                done
-            fi
-            (( idx >= 0 )) && MENU_SELECTED=$idx
-            ;;
-    esac
-}
-
 # ── 交互：读取一个按键 ──
-# 返回 UP / DOWN / LEFT / RIGHT / ENTER / ESC / TIMEOUT / EOF 或单个字符
+# 返回 UP / DOWN / ENTER / ESC / TIMEOUT / EOF 或单个字符
 menu_read_key() {
     local k='' rc seq=''
     IFS= read -rsn1 -t "$MENU_IDLE_REFRESH" k
@@ -2442,14 +2430,21 @@ menu_read_key() {
         case "$seq" in
             '[A') printf 'UP' ;;
             '[B') printf 'DOWN' ;;
-            '[C') printf 'RIGHT' ;;
-            '[D') printf 'LEFT' ;;
             *)    printf 'ESC' ;;
         esac
         return 0
     fi
     [[ -z "$k" ]] && { printf 'ENTER'; return 0; }
     printf '%s' "$k"
+}
+
+# 上下移动，到头循环
+menu_move() {
+    if [[ "$1" == "up" ]]; then
+        MENU_SELECTED=$(( (MENU_SELECTED - 1 + MENU_COUNT) % MENU_COUNT ))
+    else
+        MENU_SELECTED=$(( (MENU_SELECTED + 1) % MENU_COUNT ))
+    fi
 }
 
 # ── 状态数据 ──
@@ -2507,26 +2502,75 @@ get_current_speed() {
 
 # ── 绘制组件 ──
 
-# 单个选项格；宽度固定为 cw，选中项整格反色
-menu_cell() {
-    local idx="$1" cw="$2" key label plain pad key_color
-    if (( idx < 0 )); then
-        repeat ' ' "$cw"
-        return 0
+MENU_ROW_WIDTH_HINT=0     # 含说明列时的最长行宽
+MENU_ROW_WIDTH_PLAIN=0    # 仅名称时的最长行宽
+
+# 选中行的反色条只覆盖菜单内容宽度，不拉到终端边缘；宽度由菜单数据算出并缓存
+menu_row_width() {
+    local show_hint="$1" i w body label_pad
+    if (( show_hint == 1 )); then
+        (( MENU_ROW_WIDTH_HINT > 0 )) && { printf '%d' "$MENU_ROW_WIDTH_HINT"; return 0; }
+    else
+        (( MENU_ROW_WIDTH_PLAIN > 0 )) && { printf '%d' "$MENU_ROW_WIDTH_PLAIN"; return 0; }
     fi
+
+    w=0
+    for ((i=0; i<MENU_COUNT; i++)); do
+        label_pad=$(( MENU_LABEL_WIDTH - $(str_width "${MENU_LABELS[$i]}") ))
+        (( label_pad < 2 )) && label_pad=2
+        if (( show_hint == 1 )); then
+            body="[${MENU_KEYS[$i]}] ${MENU_LABELS[$i]}$(repeat ' ' "$label_pad")${MENU_HINTS[$i]}"
+        else
+            body="[${MENU_KEYS[$i]}] ${MENU_LABELS[$i]}"
+        fi
+        local bw
+        bw=$(str_width "$body")
+        (( bw > w )) && w=$bw
+    done
+
+    if (( show_hint == 1 )); then
+        MENU_ROW_WIDTH_HINT=$w
+    else
+        MENU_ROW_WIDTH_PLAIN=$w
+    fi
+    printf '%d' "$w"
+}
+
+# 单个选项行；选中项整行反色，名称与说明分列对齐
+menu_row() {
+    local idx="$1" row_width="$2" show_hint="$3"
+    local key label hint body pad label_pad key_color
+
     key="${MENU_KEYS[$idx]}"
     label="${MENU_LABELS[$idx]}"
-    plain="[$key] $label"
-    pad=$(( cw - 2 - $(str_width "$plain") ))
-    (( pad < 0 )) && pad=0
-    if (( idx == MENU_SELECTED )); then
-        printf '%b▸ %s%s%b' "$REV" "$plain" "$(repeat ' ' "$pad")" "$RESET"
+    hint="${MENU_HINTS[$idx]}"
+
+    label_pad=$(( MENU_LABEL_WIDTH - $(str_width "$label") ))
+    (( label_pad < 2 )) && label_pad=2
+
+    if (( show_hint == 1 )); then
+        body="[$key] ${label}$(repeat ' ' "$label_pad")${hint}"
     else
-        key_color="$KEY"
-        [[ "$key" == "U" ]] && key_color="$DANGER"
-        [[ "$key" == "0" ]] && key_color="$GRAY"
-        printf '  %b[%s]%b %b%s%b%s' \
-            "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET" "$(repeat ' ' "$pad")"
+        body="[$key] ${label}"
+    fi
+
+    if (( idx == MENU_SELECTED )); then
+        pad=$(( row_width - $(str_width "$body") ))
+        (( pad < 0 )) && pad=0
+        printf '%s%b▸ %s%s%b\n' "$UI_INDENT" "$REV" "$body" "$(repeat ' ' "$pad")" "$RESET"
+        return 0
+    fi
+
+    key_color="$KEY"
+    [[ "$key" == "U" ]] && key_color="$DANGER"
+    [[ "$key" == "0" ]] && key_color="$GRAY"
+    if (( show_hint == 1 )); then
+        printf '%s  %b[%s]%b %b%s%b%s%b%s%b\n' "$UI_INDENT" \
+            "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET" \
+            "$(repeat ' ' "$label_pad")" "$MUTED" "$hint" "$RESET"
+    else
+        printf '%s  %b[%s]%b %b%s%b\n' "$UI_INDENT" \
+            "$key_color" "$key" "$RESET" "$WHITE" "$label" "$RESET"
     fi
 }
 
@@ -2570,60 +2614,35 @@ menu_status_block() {
 }
 
 # ── 渲染 ──
+# 整屏定位重绘（\033[H 归位、\033[J 清尾），不闪烁
 
 render_main_menu() {
-    local width inner cw entry kind a b left_title right_title
+    local width inner show_hint row_width i
 
     width=$(ui_width)
     inner=$((width - 4))
-    menu_build_layout "$width"
-    if (( MENU_NAV_COLS == 2 )); then
-        cw=$(( (inner - MENU_GUTTER) / 2 ))
-    else
-        cw=$inner
-    fi
+    show_hint=1
+    (( width < MENU_HINT_MIN_WIDTH )) && show_hint=0
+    row_width=$(menu_row_width "$show_hint")
+    # 反色条不超出可用内容区
+    (( row_width > inner - 2 )) && row_width=$(( inner - 2 ))
 
     printf '\033[H'
     echo
     ui_title "$APP_TITLE"
     menu_status_block "$width"
     ui_rule "$width"
-    echo
 
-    for entry in "${MENU_LAYOUT[@]}"; do
-        IFS='|' read -r kind a b <<< "$entry"
-        case "$kind" in
-            H)
-                left_title="$a"
-                right_title="$b"
-                if [[ -n "$right_title" ]]; then
-                    printf '%s%b%s%b%b%s%b\n' "$UI_INDENT" \
-                        "$PRIMARY" "$(pad_line "$left_title" $((cw + MENU_GUTTER)))" "$RESET" \
-                        "$PRIMARY" "$right_title" "$RESET"
-                else
-                    ui_group "$left_title"
-                fi
-                ;;
-            R)
-                if (( MENU_NAV_COLS == 2 )); then
-                    printf '%s%s%s%s\n' "$UI_INDENT" \
-                        "$(menu_cell "$a" "$cw")" "$(repeat ' ' "$MENU_GUTTER")" "$(menu_cell "${b:--1}" "$cw")"
-                else
-                    printf '%s%s\n' "$UI_INDENT" "$(menu_cell "$a" "$cw")"
-                fi
-                ;;
-            B) echo ;;
-        esac
+    for ((i=0; i<MENU_COUNT; i++)); do
+        menu_row "$i" "$row_width" "$show_hint"
     done
 
-    echo
     ui_rule "$width"
-    printf '%s%b说明%b   %b%s%b\n' "$UI_INDENT" "$MUTED" "$RESET" "$MUTED" "${MENU_HINTS[$MENU_SELECTED]}" "$RESET"
-    if (( MENU_NAV_COLS == 2 )); then
-        ui_keyhint "↑↓ 上下移动 · ←→ 切换分栏 · Enter 确认 · 按键直达 · Q 退出"
-    else
-        ui_keyhint "↑↓ 移动 · Enter 确认 · 按键直达 · Q 退出"
+    if (( show_hint == 0 )); then
+        printf '%s%b说明%b   %b%s%b\n' "$UI_INDENT" "$MUTED" "$RESET" \
+            "$MUTED" "${MENU_HINTS[$MENU_SELECTED]}" "$RESET"
     fi
+    ui_keyhint "↑↓ 选择 · Enter 确认 · 按键直达 · Q 退出"
     printf '\033[J'
 }
 
@@ -2685,19 +2704,15 @@ show_menu() {
         case "$k" in
             TIMEOUT) render_main_menu ;;    # 空闲自动刷新状态区
             EOF)     menu_exit ;;           # 输入流关闭，避免空转
-            UP)      menu_move up;    render_main_menu ;;
-            DOWN)    menu_move down;  render_main_menu ;;
-            LEFT)    menu_move left;  render_main_menu ;;
-            RIGHT)   menu_move right; render_main_menu ;;
+            UP)      menu_move up;   render_main_menu ;;
+            DOWN)    menu_move down; render_main_menu ;;
             ENTER)   menu_dispatch; printf '\033[H\033[J'; render_main_menu ;;
             ESC)     : ;;
             *)
                 case "${k^^}" in
                     Q) menu_exit ;;
-                    K) menu_move up;    render_main_menu; continue ;;
-                    J) menu_move down;  render_main_menu; continue ;;
-                    H) menu_move left;  render_main_menu; continue ;;
-                    L) menu_move right; render_main_menu; continue ;;
+                    K) menu_move up;   render_main_menu; continue ;;
+                    J) menu_move down; render_main_menu; continue ;;
                 esac
                 for ((i=0; i<MENU_COUNT; i++)); do
                     if [[ "${k^^}" == "${MENU_KEYS[$i]}" ]]; then
@@ -2729,15 +2744,9 @@ show_menu_plain() {
     fi
     get_target_summary target_summary
     ui_kv "目标" "$target_summary"
-    echo
+    ui_rule
 
     for ((i=0; i<MENU_COUNT; i++)); do
-        case $i in
-            0) ui_group "服务管理" ;;
-            4) echo; ui_group "监控工具" ;;
-            8) echo; ui_group "系统维护" ;;
-            11) echo; ui_group "控制台" ;;
-        esac
         case "${MENU_KEYS[$i]}" in
             U) ui_item "${MENU_KEYS[$i]}" "${MENU_LABELS[$i]}" "${MENU_HINTS[$i]}" "$DANGER" ;;
             0) ui_item "${MENU_KEYS[$i]}" "${MENU_LABELS[$i]}" "${MENU_HINTS[$i]}" "$GRAY" ;;
@@ -2745,7 +2754,6 @@ show_menu_plain() {
         esac
     done
 
-    echo
     ui_rule
     if ! IFS= read -r -p "${UI_INDENT}请选择 (1-9/A/B/U/0) > " choice; then
         echo
@@ -2853,8 +2861,9 @@ check_environment() {
 
 # ──────────────────────────────── 程序主入口 ──────────────────────────────────
 
-# 检查环境并初始化
+# 检查环境、接管旧版安装并初始化
 check_environment
+migrate_legacy_install
 init_service
 
 # 记录一次控制台使用（USAGE_COUNT 按控制台启动次数统计）

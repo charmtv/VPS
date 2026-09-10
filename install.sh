@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ═══════════════════════════════════════════════════════════════════════════════════
-# 米粒儿VPS流量消耗管理工具 - 一键安装脚本
+# VPS流量消耗管理工具 - 一键安装脚本
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 # 颜色配置
@@ -18,10 +18,10 @@ if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
 fi
 
 # 配置常量
-SCRIPT_URL="https://xh.813099.xyz/milier_flow_latest.sh"
-SCRIPT_FALLBACK_URL="https://raw.githubusercontent.com/charmtv/VPS/main/milier_flow_latest.sh"
+SCRIPT_URL="https://xh.813099.xyz/vpsflow_latest.sh"
+SCRIPT_FALLBACK_URL="https://raw.githubusercontent.com/charmtv/VPS/main/vpsflow_latest.sh"
 INSTALL_DIR="/root"
-SCRIPT_NAME="milier_flow.sh"
+SCRIPT_NAME="vpsflow.sh"
 SHORTCUT_NAME="xh"
 
 # 安装过程中需要的命令；systemctl 单列，缺失时无法通过包管理器补救
@@ -241,7 +241,7 @@ create_global_shortcut() {
 
     cat > "$shortcut_path" << EOF
 #!/bin/bash
-# 米粒儿VPS流量管理工具快捷启动脚本
+# VPS流量消耗管理工具快捷启动脚本
 cd "$INSTALL_DIR" || exit 1
 bash "$INSTALL_DIR/$SCRIPT_NAME" "\$@"
 EOF
@@ -268,7 +268,7 @@ verify_installation() {
 
 main() {
     echo
-    printf '  %b正在准备米粒儿 VPS 流量控制台...%b\n' "$WHITE" "$RESET"
+    printf '  %b正在准备VPS 流量消耗管理工具...%b\n' "$WHITE" "$RESET"
     echo
     check_environment
     download_script

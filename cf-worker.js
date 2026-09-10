@@ -1,4 +1,4 @@
-// Cloudflare Worker - 米粒儿VPS流量消耗管理工具 CDN 代理
+// Cloudflare Worker - VPS流量消耗管理工具 CDN 代理
 // 部署域名: xh.813099.xyz
 // 功能: 代理 GitHub 原始文件，加速国内访问，并返回 X-SHA256 供安装脚本校验完整性
 
@@ -8,8 +8,11 @@ const GITHUB_BASE = 'https://raw.githubusercontent.com/charmtv/VPS/main';
 const ROUTE_MAP = new Map([
   ['/', '/install.sh'],
   ['/install.sh', '/install.sh'],
-  ['/milier_flow_latest.sh', '/milier_flow_latest.sh'],
+  ['/vpsflow_latest.sh', '/vpsflow_latest.sh'],
   ['/README.md', '/README.md'],
+  // 兼容 v3.4.0 改名前已安装的客户端：旧文件名指向新脚本，
+  // 这些客户端「检查脚本更新」时才能取到新版本并完成自动迁移。
+  ['/milier_flow_latest.sh', '/vpsflow_latest.sh'],
 ]);
 
 const UPSTREAM_CACHE_TTL = 60; // 秒，更新后快速生效
@@ -41,7 +44,7 @@ export default {
     try {
       const response = await fetch(`${GITHUB_BASE}${targetPath}`, {
         headers: {
-          'User-Agent': 'Cloudflare-Worker-MilierVPS',
+          'User-Agent': 'Cloudflare-Worker-VPSFlow',
           Accept: 'text/plain',
         },
         cf: {
@@ -68,7 +71,7 @@ export default {
         headers: {
           'Content-Type': contentTypeFor(targetPath),
           'Cache-Control': `public, max-age=${UPSTREAM_CACHE_TTL}`,
-          'X-Powered-By': 'MilierVPS-CDN',
+          'X-Powered-By': 'VPSFlow-CDN',
           'Access-Control-Allow-Origin': '*',
           'X-SHA256': checksum,
         },

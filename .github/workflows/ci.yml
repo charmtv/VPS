@@ -17,7 +17,7 @@ jobs:
 
       - name: bash 语法检查
         run: |
-          for f in install.sh milier_flow_latest.sh; do
+          for f in install.sh vpsflow_latest.sh; do
             echo "== bash -n $f"
             bash -n "$f"
           done
@@ -28,7 +28,7 @@ jobs:
           python3 - <<'PY'
           import re, subprocess, sys, pathlib
 
-          text = pathlib.Path("milier_flow_latest.sh").read_text(encoding="utf-8")
+          text = pathlib.Path("vpsflow_latest.sh").read_text(encoding="utf-8")
           out = pathlib.Path("generated"); out.mkdir(exist_ok=True)
           markers = ["LIBEOF", "STARTEOF", "MONITOREOF", "TARGETEOF"]
           failed = False
@@ -49,4 +49,4 @@ jobs:
           PY
 
       - name: shellcheck
-        run: shellcheck --severity=warning install.sh milier_flow_latest.sh || true
+        run: shellcheck --severity=warning install.sh vpsflow_latest.sh || true
